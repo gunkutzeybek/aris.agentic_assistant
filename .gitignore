@@ -1,0 +1,56 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+homapel_conversation.zip
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / coverage
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+coverage.xml
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Home Assistant local test config (if someone drops a dev config here)
+config/
+.storage/

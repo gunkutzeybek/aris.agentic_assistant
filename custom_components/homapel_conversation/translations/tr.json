@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Homapel Konuşma",
+        "description": "Bu Home Assistant örneğini Homapel buluta bağlamak için, Homapel kurulum aracının ürettiği üniteye özel API anahtarını girin. Genellikle kurulum aracı tarafından otomatik yazılır; bu formu yalnızca manuel kurulum için kullanın.",
+        "data": {
+          "api_key": "API anahtarı",
+          "api_base": "Bulut adresi",
+          "default_language": "Varsayılan dil (aktivasyon uyarısı için)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "API anahtarı Homapel bulut tarafından reddedildi.",
+      "forbidden": "Bu ünite bağlanmaya yetkili değil (askıda veya yanlış kiracı).",
+      "timeout": "Homapel buluta ulaşılamadı (zaman aşımı).",
+      "cannot_connect": "Homapel buluta bağlanılamadı.",
+      "unknown": "Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin."
+    },
+    "abort": {
+      "already_configured": "Bu ünite zaten yapılandırılmış."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "active": { "name": "Aktif" }
+    },
+    "sensor": {
+      "tier": { "name": "Abonelik seviyesi" },
+      "latency": { "name": "Son bulut gecikmesi" }
+    },
+    "conversation": {
+      "homapel": { "name": "Homapel" }
+    }
+  }
+}
