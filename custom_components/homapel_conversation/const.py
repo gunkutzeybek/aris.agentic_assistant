@@ -27,7 +27,7 @@ DEFAULT_LANGUAGE: Final = "tr"
 SUPPORTED_LANGUAGES: Final = ["tr", "en"]
 
 POLL_INTERVAL: Final = timedelta(minutes=5)
-CONVERSE_TIMEOUT: Final = 15
+CONVERSE_TIMEOUT: Final = 60
 STATUS_TIMEOUT: Final = 5
 
 DORMANT_PROMPT: Final = {

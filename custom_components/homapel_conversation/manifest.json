@@ -1,7 +1,7 @@
 {
   "domain": "homapel_conversation",
   "name": "Homapel Conversation",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "codeowners": ["@gunkutzeybek"],
   "config_flow": true,
   "dependencies": ["conversation", "webhook"],

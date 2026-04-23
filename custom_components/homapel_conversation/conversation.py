@@ -98,15 +98,22 @@ class HomapelConversationEntity(
         area_id = self._area_id_for(user_input.device_id) if user_input.device_id else None
 
         started = time.monotonic()
+        stream = self.coordinator.client.converse_stream(
+            self.coordinator.api_key,
+            text=user_input.text,
+            conversation_id=conversation_id,
+            language=wire_lang,
+            device_id=user_input.device_id,
+            area_id=area_id,
+        )
+        speech_parts: list[str] = []
         try:
-            result = await self.coordinator.client.converse(
-                self.coordinator.api_key,
-                text=user_input.text,
-                conversation_id=conversation_id,
-                language=wire_lang,
-                device_id=user_input.device_id,
-                area_id=area_id,
-            )
+            async for content in chat_log.async_add_delta_content_stream(
+                user_input.agent_id, stream
+            ):
+                chunk = getattr(content, "content", None)
+                if chunk:
+                    speech_parts.append(chunk)
         except HomapelAuthError as err:
             return self._error_result(
                 response, conversation_id, started,
@@ -150,14 +157,14 @@ class HomapelConversationEntity(
         # Cloud can signal dormant per-request (§7.3.2) even if our cached
         # status is stale. Its speech already contains the activation prompt,
         # but we still want to refresh coordinator state.
-        if result.dormant:
+        if stream.dormant:
             await self.coordinator.async_request_refresh()
 
-        response.async_set_speech(result.speech)
+        response.async_set_speech("".join(speech_parts))
         return ConversationResult(
             response=response,
-            conversation_id=result.conversation_id,
-            continue_conversation=result.continue_conversation,
+            conversation_id=stream.conversation_id or conversation_id,
+            continue_conversation=stream.continue_conversation,
         )
 
     def _error_result(

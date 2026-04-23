@@ -6,7 +6,9 @@ standard error envelope from §7.2 and maps error codes to typed exceptions.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,16 +80,134 @@ class StatusResult:
     not_modified: bool = False  # True when server returned 304
 
 
-@dataclass(slots=True)
-class ConverseResult:
-    speech: str
-    conversation_id: str
-    continue_conversation: bool
-    llm_used: str | None
-    tokens_in: int
-    tokens_out: int
-    tier: str | None
-    dormant: bool
+class ConverseStream:
+    """Async-iterable of HA assistant content deltas.
+
+    Adapts both transports the cloud may use:
+      * ``text/event-stream`` — yields a delta per SSE ``delta`` event,
+        plus a final ``meta`` event populating the result fields.
+      * ``application/json`` — yields exactly one delta containing the full
+        speech, then ends. Result fields come from the JSON body.
+
+    The shape of yielded dicts matches HA's ``AssistantContentDeltaDict``
+    (role/content/thinking_content), so the entity can hand this iterator
+    straight to ``chat_log.async_add_delta_content_stream``.
+
+    After iteration completes, the metadata fields below are populated.
+    Any error mid-stream (or before first delta) raises a typed exception
+    from this module — same ladder as the non-streaming path.
+    """
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> None:
+        self._session = session
+        self._url = url
+        self._body = body
+        self._headers = headers
+        self._timeout = timeout
+        # Populated during/after iteration.
+        self.conversation_id: str | None = None
+        self.continue_conversation: bool = False
+        self.dormant: bool = False
+        self.llm_used: str | None = None
+        self.tokens_in: int = 0
+        self.tokens_out: int = 0
+        self.tier: str | None = None
+
+    async def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+        try:
+            async with self._session.request(
+                "POST",
+                self._url,
+                json=self._body,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+            ) as resp:
+                request_id = resp.headers.get("X-Request-Id")
+                if not (200 <= resp.status < 300):
+                    await _raise_for_error(resp, request_id)
+
+                content_type = resp.headers.get("Content-Type", "").split(";", 1)[0].strip()
+                if content_type == "text/event-stream":
+                    async for delta in self._iter_sse(resp):
+                        yield delta
+                else:
+                    payload = await resp.json()
+                    self._populate_meta(payload)
+                    yield {"role": "assistant", "content": payload["speech"]}
+        except asyncio.TimeoutError as err:
+            raise HomapelTimeoutError(str(err)) from err
+        except aiohttp.ClientError as err:
+            raise HomapelNetworkError(str(err)) from err
+
+    async def _iter_sse(
+        self, resp: aiohttp.ClientResponse
+    ) -> AsyncIterator[dict[str, Any]]:
+        first_delta = True
+        event_name: str | None = None
+        data_lines: list[str] = []
+
+        async for raw in resp.content:
+            line = raw.decode("utf-8").rstrip("\r\n")
+            if line == "":
+                if not data_lines:
+                    event_name = None
+                    continue
+                data = "\n".join(data_lines)
+                event = event_name or "message"
+                data_lines = []
+                event_name = None
+                try:
+                    payload = json.loads(data)
+                except ValueError:
+                    _LOGGER.warning("Skipping non-JSON SSE event %s: %r", event, data)
+                    continue
+
+                if event == "meta":
+                    self._populate_meta(payload)
+                elif event == "error":
+                    raise _map_error_payload(payload)
+                else:
+                    delta: dict[str, Any] = {}
+                    if first_delta:
+                        delta["role"] = "assistant"
+                        first_delta = False
+                    if "content" in payload:
+                        delta["content"] = payload["content"]
+                    if "thinking_content" in payload:
+                        delta["thinking_content"] = payload["thinking_content"]
+                    if delta:
+                        yield delta
+                continue
+
+            if line.startswith(":"):
+                continue
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].lstrip(" "))
+
+    def _populate_meta(self, data: dict[str, Any]) -> None:
+        if "conversation_id" in data:
+            self.conversation_id = data["conversation_id"]
+        if "continue_conversation" in data:
+            self.continue_conversation = bool(data["continue_conversation"])
+        if "dormant" in data:
+            self.dormant = bool(data["dormant"])
+        if "llm_used" in data:
+            self.llm_used = data["llm_used"]
+        tokens = data.get("tokens") or {}
+        if tokens:
+            self.tokens_in = int(tokens.get("in", 0))
+            self.tokens_out = int(tokens.get("out", 0))
+        if "tier" in data:
+            self.tier = data["tier"]
 
 
 class HomapelCloudClient:
@@ -149,7 +269,7 @@ class HomapelCloudClient:
             auth_key=api_key,
         )
 
-    async def converse(
+    def converse_stream(
         self,
         api_key: str,
         *,
@@ -159,8 +279,13 @@ class HomapelCloudClient:
         device_id: str | None = None,
         area_id: str | None = None,
         speaker_id: str | None = None,
-    ) -> ConverseResult:
-        """§7.3.2 — send utterance, receive agent reply."""
+    ) -> ConverseStream:
+        """§7.3.2 — open a converse request that yields assistant deltas.
+
+        Negotiates SSE via ``Accept`` but falls back to JSON transparently.
+        See ``ConverseStream`` for iteration semantics and the metadata
+        fields populated as the stream is consumed.
+        """
         body: dict[str, Any] = {
             "text": text,
             "conversation_id": conversation_id,
@@ -175,23 +300,16 @@ class HomapelCloudClient:
             if speaker_id is not None:
                 body["context"]["speaker_id"] = speaker_id
 
-        _, data, _ = await self._request(
-            "POST",
-            "/v1/converse",
-            json=body,
-            timeout=CONVERSE_TIMEOUT,
-            auth_key=api_key,
-        )
-        tokens = data.get("tokens", {}) or {}
-        return ConverseResult(
-            speech=data["speech"],
-            conversation_id=data["conversation_id"],
-            continue_conversation=bool(data.get("continue_conversation", False)),
-            llm_used=data.get("llm_used"),
-            tokens_in=int(tokens.get("in", 0)),
-            tokens_out=int(tokens.get("out", 0)),
-            tier=data.get("tier"),
-            dormant=bool(data.get("dormant", False)),
+        headers = {
+            "Accept": "text/event-stream, application/json;q=0.9",
+            "Authorization": f"Bearer {api_key}",
+        }
+        return ConverseStream(
+            self._session,
+            f"{self._api_base}/v1/converse",
+            body,
+            headers,
+            CONVERSE_TIMEOUT,
         )
 
     async def _request(
@@ -232,7 +350,7 @@ class HomapelCloudClient:
                             payload = {}
                     return resp.status, payload, dict(resp.headers)
 
-                await self._raise_for_error(resp, request_id)
+                await _raise_for_error(resp, request_id)
                 # _raise_for_error always raises
                 raise HomapelApiError("unreachable")
         except asyncio.TimeoutError as err:
@@ -240,36 +358,60 @@ class HomapelCloudClient:
         except aiohttp.ClientError as err:
             raise HomapelNetworkError(str(err)) from err
 
-    async def _raise_for_error(
-        self, resp: aiohttp.ClientResponse, request_id: str | None
-    ) -> None:
-        """Parse the §7.2 error envelope and raise a typed exception."""
-        code: str | None = None
-        message = f"HTTP {resp.status}"
-        try:
-            envelope = await resp.json()
-            if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
-                err = envelope["error"]
-                code = err.get("code")
-                message = err.get("message") or message
-        except (aiohttp.ContentTypeError, ValueError):
-            pass
 
-        status = resp.status
-        retry_after_raw = resp.headers.get("Retry-After")
-        retry_after = int(retry_after_raw) if retry_after_raw and retry_after_raw.isdigit() else None
-        ctx = {"code": code, "status": status, "request_id": request_id}
+async def _raise_for_error(
+    resp: aiohttp.ClientResponse, request_id: str | None
+) -> None:
+    """Parse the §7.2 error envelope and raise a typed exception."""
+    code: str | None = None
+    message = f"HTTP {resp.status}"
+    try:
+        envelope = await resp.json()
+        if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
+            err = envelope["error"]
+            code = err.get("code")
+            message = err.get("message") or message
+    except (aiohttp.ContentTypeError, ValueError):
+        pass
 
-        if status == 401:
-            raise HomapelAuthError(message, **ctx)
-        if status == 403:
-            raise HomapelForbiddenError(message, **ctx)
-        if status == 422 and code == "unit_not_active":
-            raise HomapelUnitNotActiveError(message, **ctx)
-        if status == 429:
-            if code == "cost_ceiling_exceeded":
-                raise HomapelCostCeilingError(message, **ctx)
-            raise HomapelRateLimitedError(message, retry_after=retry_after, **ctx)
-        if 500 <= status < 600:
-            raise HomapelNetworkError(message, **ctx)
-        raise HomapelApiError(message, **ctx)
+    status = resp.status
+    retry_after_raw = resp.headers.get("Retry-After")
+    retry_after = int(retry_after_raw) if retry_after_raw and retry_after_raw.isdigit() else None
+    ctx = {"code": code, "status": status, "request_id": request_id}
+
+    if status == 401:
+        raise HomapelAuthError(message, **ctx)
+    if status == 403:
+        raise HomapelForbiddenError(message, **ctx)
+    if status == 422 and code == "unit_not_active":
+        raise HomapelUnitNotActiveError(message, **ctx)
+    if status == 429:
+        if code == "cost_ceiling_exceeded":
+            raise HomapelCostCeilingError(message, **ctx)
+        raise HomapelRateLimitedError(message, retry_after=retry_after, **ctx)
+    if 500 <= status < 600:
+        raise HomapelNetworkError(message, **ctx)
+    raise HomapelApiError(message, **ctx)
+
+
+def _map_error_payload(payload: dict[str, Any]) -> HomapelApiError:
+    """Map an SSE ``error`` event payload to a typed exception.
+
+    Mirrors the §7.2 envelope shape (``{"error": {"code", "message"}}``) so
+    a mid-stream error looks the same to the entity as a pre-stream HTTP
+    failure. Status is unknown at this point — we map purely on ``code``.
+    """
+    err = payload.get("error") if isinstance(payload.get("error"), dict) else payload
+    code = err.get("code") if isinstance(err, dict) else None
+    message = (err.get("message") if isinstance(err, dict) else None) or "stream error"
+    ctx = {"code": code, "status": None, "request_id": None}
+
+    if code == "unit_not_active":
+        return HomapelUnitNotActiveError(message, **ctx)
+    if code == "cost_ceiling_exceeded":
+        return HomapelCostCeilingError(message, **ctx)
+    if code == "rate_limited":
+        return HomapelRateLimitedError(message, retry_after=None, **ctx)
+    if code in ("unauthorized", "invalid_token"):
+        return HomapelAuthError(message, **ctx)
+    return HomapelApiError(message, **ctx)
