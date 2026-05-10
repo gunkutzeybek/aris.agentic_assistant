@@ -19,6 +19,9 @@ CONF_UNIT_ID: Final = "unit_id"
 CONF_API_BASE: Final = "api_base"
 CONF_DEFAULT_LANGUAGE: Final = "default_language"
 
+# Options-only (set via OptionsFlow, not part of §7.7.3 entry data).
+CONF_CONVERSE_SOCK_READ: Final = "converse_sock_read"
+
 DEFAULT_API_BASE: Final = "https://api.homapel.com"
 DEFAULT_LANGUAGE: Final = "tr"
 
@@ -27,7 +30,10 @@ DEFAULT_LANGUAGE: Final = "tr"
 SUPPORTED_LANGUAGES: Final = ["tr", "en"]
 
 POLL_INTERVAL: Final = timedelta(minutes=5)
-CONVERSE_TIMEOUT: Final = 60
+# Idle/inactivity timeout on the converse socket. Bounds the gap between
+# bytes from the cloud (think-time before JSON, or gap between SSE deltas);
+# the request as a whole is unbounded so long answers don't get truncated.
+DEFAULT_CONVERSE_SOCK_READ: Final = 90
 STATUS_TIMEOUT: Final = 5
 
 DORMANT_PROMPT: Final = {

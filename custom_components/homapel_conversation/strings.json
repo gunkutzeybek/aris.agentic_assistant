@@ -22,6 +22,20 @@
       "already_configured": "This unit is already configured."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Homapel Conversation",
+        "description": "Tune per-installation settings. Changes apply on the next utterance.",
+        "data": {
+          "converse_sock_read": "Cloud idle timeout (seconds)"
+        },
+        "data_description": {
+          "converse_sock_read": "Maximum time the cloud may go silent mid-request before the call is aborted. Bounds the model's think-time and gaps between streamed deltas; the request as a whole is unbounded so long answers won't be truncated."
+        }
+      }
+    }
+  },
   "entity": {
     "binary_sensor": {
       "active": { "name": "Active" }

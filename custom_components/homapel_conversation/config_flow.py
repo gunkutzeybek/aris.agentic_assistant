@@ -15,7 +15,13 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import (
@@ -28,9 +34,11 @@ from .api import (
 from .const import (
     CONF_API_BASE,
     CONF_API_KEY,
+    CONF_CONVERSE_SOCK_READ,
     CONF_DEFAULT_LANGUAGE,
     CONF_UNIT_ID,
     DEFAULT_API_BASE,
+    DEFAULT_CONVERSE_SOCK_READ,
     DEFAULT_LANGUAGE,
     DOMAIN,
     SUPPORTED_LANGUAGES,
@@ -43,6 +51,11 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Homapel Conversation."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return HomapelOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -93,3 +106,25 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+
+class HomapelOptionsFlow(OptionsFlow):
+    """Per-entry tunables. Picked up on the next utterance — no reload needed."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current_sock_read = self.config_entry.options.get(
+            CONF_CONVERSE_SOCK_READ, DEFAULT_CONVERSE_SOCK_READ
+        )
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_CONVERSE_SOCK_READ, default=current_sock_read
+                ): vol.All(vol.Coerce(int), vol.Range(min=10, max=600)),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

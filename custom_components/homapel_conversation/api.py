@@ -14,7 +14,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import CONVERSE_TIMEOUT, STATUS_TIMEOUT
+from .const import STATUS_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,13 +104,13 @@ class ConverseStream:
         url: str,
         body: dict[str, Any],
         headers: dict[str, str],
-        timeout: float,
+        sock_read: float,
     ) -> None:
         self._session = session
         self._url = url
         self._body = body
         self._headers = headers
-        self._timeout = timeout
+        self._sock_read = sock_read
         # Populated during/after iteration.
         self.conversation_id: str | None = None
         self.continue_conversation: bool = False
@@ -127,7 +127,7 @@ class ConverseStream:
                 self._url,
                 json=self._body,
                 headers=self._headers,
-                timeout=aiohttp.ClientTimeout(total=self._timeout),
+                timeout=aiohttp.ClientTimeout(sock_read=self._sock_read),
             ) as resp:
                 request_id = resp.headers.get("X-Request-Id")
                 if not (200 <= resp.status < 300):
@@ -276,6 +276,7 @@ class HomapelCloudClient:
         text: str,
         conversation_id: str,
         language: str,
+        sock_read: float,
         device_id: str | None = None,
         area_id: str | None = None,
         speaker_id: str | None = None,
@@ -309,7 +310,7 @@ class HomapelCloudClient:
             f"{self._api_base}/v1/converse",
             body,
             headers,
-            CONVERSE_TIMEOUT,
+            sock_read,
         )
 
     async def _request(

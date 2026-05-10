@@ -22,6 +22,20 @@
       "already_configured": "Bu ünite zaten yapılandırılmış."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Homapel Konuşma",
+        "description": "Üniteye özel ayarlar. Değişiklikler bir sonraki konuşmadan itibaren geçerli olur.",
+        "data": {
+          "converse_sock_read": "Bulut boşta kalma zaman aşımı (saniye)"
+        },
+        "data_description": {
+          "converse_sock_read": "Bulutun istek sırasında veri göndermeden geçirebileceği en uzun süre; bu süre aşılırsa istek iptal edilir. Modelin düşünme süresini ve akıştaki parçalar arasındaki boşlukları sınırlar; isteğin toplam süresi sınırsızdır, böylece uzun yanıtlar kesilmez."
+        }
+      }
+    }
+  },
   "entity": {
     "binary_sensor": {
       "active": { "name": "Aktif" }

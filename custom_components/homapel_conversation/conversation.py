@@ -30,8 +30,10 @@ from .api import (
     HomapelUnitNotActiveError,
 )
 from .const import (
+    CONF_CONVERSE_SOCK_READ,
     CONF_DEFAULT_LANGUAGE,
     CONF_UNIT_ID,
+    DEFAULT_CONVERSE_SOCK_READ,
     DEFAULT_LANGUAGE,
     DOMAIN,
     DORMANT_PROMPT,
@@ -97,12 +99,18 @@ class HomapelConversationEntity(
 
         area_id = self._area_id_for(user_input.device_id) if user_input.device_id else None
 
+        sock_read = float(
+            self._entry.options.get(
+                CONF_CONVERSE_SOCK_READ, DEFAULT_CONVERSE_SOCK_READ
+            )
+        )
         started = time.monotonic()
         stream = self.coordinator.client.converse_stream(
             self.coordinator.api_key,
             text=user_input.text,
             conversation_id=conversation_id,
             language=wire_lang,
+            sock_read=sock_read,
             device_id=user_input.device_id,
             area_id=area_id,
         )
