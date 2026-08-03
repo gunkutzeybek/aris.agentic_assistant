@@ -1,16 +1,25 @@
 # Homapel Conversation
 
-A Home Assistant custom integration that registers the **Homapel** conversation agent inside the Assist pipeline. Every utterance is proxied to the Homapel cloud, which runs the agentic AI, calls back into Home Assistant via `ha-mcp`, and returns the spoken reply.
+A Home Assistant custom integration that provides the **complete Assist voice pipeline** from Homapel: speech-to-text, the conversation agent, and text-to-speech. Every utterance is proxied to the Homapel cloud, which runs the agentic AI, calls back into Home Assistant via `ha-mcp`, and returns the spoken reply.
+
+One API key covers all three stages. Speech providers are called with Homapel's own credentials, server-side — **no provider key is ever stored on your Home Assistant instance.**
 
 This integration is **pre-installed by Homapel** during construction — residents never configure it manually.
 
 ## What it does
 
 - Registers a `ConversationEntity` that handles voice commands for the Assist pipeline
-- Proxies every utterance to `https://api.homapel.com/v1/converse`
-- When the unit has no active subscription, returns a hardcoded TR/EN activation prompt — **no cloud call, no cost**
+- Registers **speech-to-text** and **text-to-speech** entities backed by the same API key
+- Proxies every utterance to `https://api.homapel.com`
+- When the unit has no active subscription, returns a hardcoded TR/EN activation prompt — **no cloud call, no cost**. Speech still works, so the activation prompt can be spoken aloud
 - Keeps activation state fresh via 5-minute polling **and** a cloud webhook for instant updates
-- Exposes diagnostics entities: active/dormant, subscription tier, cloud latency
+- Exposes diagnostics entities: active/dormant, subscription tier, cloud and speech latency
+
+## Speed
+
+The three Assist stages are separate calls, each paying a round trip from the home. The integration lets the cloud overlap them: transcription starts while the resident is still speaking, and the reply is synthesized as the model writes it, so audio begins playing before the answer is finished.
+
+This only applies to pipelines that use Homapel for **all three** stages. Mixed pipelines work normally, just without the overlap. See [Options](#options) if you want it off.
 
 ## Requirements
 
@@ -58,19 +67,52 @@ The integration validates the key against `GET /v1/units/status` and stores it i
 | Entity | Purpose |
 |---|---|
 | `conversation.homapel` | The conversation agent Assist talks to |
+| `stt.homapel` | Speech-to-text engine |
+| `tts.homapel` | Text-to-speech engine |
 | `binary_sensor.homapel_aris_active` | `on` when the subscription is active |
 | `sensor.homapel_aris_subscription_tier` | `dormant` / `basic` / `pro` |
 | `sensor.homapel_aris_last_cloud_latency` | Last `/v1/converse` round-trip in ms |
+| `sensor.homapel_aris_last_speech_to_text_latency` | Cloud-side transcription time in ms, excluding upload — attributes carry the last utterance length and reply size |
+
+The speech entities appear only when voice is enabled for the unit server-side.
+
+## Assist pipeline setup
+
+**Settings → Voice assistants → Add assistant**, then select Homapel for all three stages:
+
+| Stage | Select |
+|---|---|
+| Speech-to-text | Homapel |
+| Conversation agent | Homapel |
+| Text-to-speech | Homapel |
+
+Wake word detection stays local (`openWakeWord` / `microWakeWord`) — it never reaches the cloud.
+
+Voice selection is offered per language in the text-to-speech settings. Available voices come from the cloud and can differ between languages.
+
+## Options
+
+**Settings → Devices & services → Homapel Conversation → Configure**
+
+| Option | Default | Notes |
+|---|---|---|
+| Cloud idle timeout | 90 s | How long the cloud may go silent mid-request before the call is aborted. Bounds model think-time; the request as a whole is unbounded so long answers aren't truncated |
+| Speed up spoken replies | on | Lets the cloud start generating speech while the answer is still being written. Applies only to pipelines that are Homapel end-to-end; turn off to make each step wait for the previous one |
 
 ## Languages
 
 Turkish and English. The pipeline's language is passed through to the cloud per utterance; the **Default language** option only controls the dormant prompt fallback.
+
+Speech-to-text and text-to-speech advertise their supported languages separately — a language may be available for transcription but not synthesis.
 
 ## Troubleshooting
 
 - **"The API key was rejected by the Homapel cloud"** — the key is wrong, revoked, or the unit was re-provisioned (new key issued). Re-run the installer tool.
 - **"Could not reach the Homapel cloud"** — check outbound internet; the integration needs HTTPS access to `api.homapel.com`.
 - **Conversation always returns the dormant prompt** — the subscription is inactive or the daily cost ceiling was hit. Visit homapel.com to activate, renew, or check usage.
+- **No Homapel option under speech-to-text or text-to-speech** — voice is not enabled for this unit server-side. The entities are only created when the cloud advertises them; restart HA after it is enabled.
+- **Assist says it didn't understand, but the microphone works** — silence and background noise are filtered in the cloud and return an empty transcript by design, which is what prevents a noisy room from inventing commands.
+- **Replies are slower than expected** — check `sensor.homapel_aris_last_speech_to_text_latency`. It measures only the cloud's own transcription time, so a high value points at the cloud, and a low value with slow replies points at the network between the home and Homapel.
 
 ## License
 
