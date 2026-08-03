@@ -106,6 +106,7 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
         # its speculative run every turn and the overlap is silently lost.
         # Unresolvable is fine — that just costs the speculation.
         device_id = async_active_satellite_device(self.hass)
+        eager = self._eager_enabled()
 
         try:
             result = await self.coordinator.client.transcribe(
@@ -117,13 +118,24 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
                 max_audio_seconds=capability.max_audio_seconds if capability else 0,
                 device_id=device_id,
                 area_id=async_area_id_for(self.hass, device_id),
-                eager=self._eager_enabled(),
+                eager=eager,
             )
         except HomapelApiError as err:
             _LOGGER.warning("Speech-to-text failed: %s", err)
             return SpeechResult(None, SpeechResultState.ERROR)
 
-        self.coordinator.record_stt(result.audio_seconds, result.provider_ms)
+        self.coordinator.record_stt(
+            result.audio_seconds, result.provider_ms, device_id=device_id, eager=eager
+        )
+        _LOGGER.debug(
+            "STT %.2fs in %sms (device=%s eager=%s turn=%s) -> %r",
+            result.audio_seconds,
+            result.provider_ms,
+            device_id or "unresolved",
+            eager,
+            result.turn_id,
+            result.text,
+        )
 
         # Handed to the conversation entity, which echoes it back to the cloud
         # so the turn's TTS feed can run. Skipped for silence — an empty

@@ -182,6 +182,13 @@ class HomapelConversationEntity(
         # so the TTS entity goes straight to Mode A instead.
         if stream.turn_id and speech:
             self.coordinator.turns.remember_speech(speech, stream.turn_id)
+        _LOGGER.debug(
+            "Converse done in %sms (feed=%s tokens=%s/%s)",
+            int((time.monotonic() - started) * 1000),
+            "live" if stream.turn_id else "none",
+            stream.tokens_in,
+            stream.tokens_out,
+        )
 
         response.async_set_speech(speech)
         return ConversationResult(

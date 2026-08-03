@@ -41,6 +41,11 @@ class HomapelState:
     last_tts_characters: int | None = None
     last_tokens_in: int | None = None
     last_tokens_out: int | None = None
+    # Observability for the overlap: a discarded speculation is indistinguishable
+    # from a cold run except in timing, so surface what we actually sent.
+    last_eager: bool | None = None
+    last_stt_device_id: str | None = None
+    last_tts_mode: str | None = None  # "attached" (fast path) | "standalone"
 
 
 class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
@@ -105,6 +110,9 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_tts_characters=prev.last_tts_characters if prev else None,
             last_tokens_in=prev.last_tokens_in if prev else None,
             last_tokens_out=prev.last_tokens_out if prev else None,
+            last_eager=prev.last_eager if prev else None,
+            last_stt_device_id=prev.last_stt_device_id if prev else None,
+            last_tts_mode=prev.last_tts_mode if prev else None,
         )
 
     def async_apply_webhook_update(self, payload: dict[str, Any]) -> bool:
@@ -142,6 +150,9 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_tts_characters=self.data.last_tts_characters,
             last_tokens_in=self.data.last_tokens_in,
             last_tokens_out=self.data.last_tokens_out,
+            last_eager=self.data.last_eager,
+            last_stt_device_id=self.data.last_stt_device_id,
+            last_tts_mode=self.data.last_tts_mode,
         )
         self.async_set_updated_data(updated)
         return True
@@ -157,19 +168,30 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
         self.data.last_tokens_out = tokens_out
         self.async_update_listeners()
 
-    def record_stt(self, audio_seconds: float, provider_ms: int | None) -> None:
-        """Record metering/latency from the most recent /v1/stt call."""
+    def record_stt(
+        self,
+        audio_seconds: float,
+        provider_ms: int | None,
+        *,
+        device_id: str | None = None,
+        eager: bool = False,
+    ) -> None:
+        """Record metering/latency/context from the most recent /v1/stt call."""
         if self.data is None:
             return
         self.data.last_stt_audio_seconds = audio_seconds
         self.data.last_stt_provider_ms = provider_ms
+        self.data.last_stt_device_id = device_id
+        self.data.last_eager = eager
         self.async_update_listeners()
 
-    def record_tts(self, characters: int) -> None:
-        """Record billable character count from the most recent /v1/tts call."""
+    def record_tts(self, characters: int, *, mode: str | None = None) -> None:
+        """Record billable characters and which /v1/tts path served the audio."""
         if self.data is None:
             return
         self.data.last_tts_characters = characters
+        if mode is not None:
+            self.data.last_tts_mode = mode
         self.async_update_listeners()
 
     def record_converse_latency(self, latency_ms: int, error: str | None = None) -> None:

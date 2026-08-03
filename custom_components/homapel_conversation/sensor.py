@@ -106,10 +106,17 @@ class HomapelVoiceLatencySensor(_HomapelSensorBase):
         return self.coordinator.data.last_stt_provider_ms
 
     @property
-    def extra_state_attributes(self) -> dict[str, float | int | None] | None:
-        if self.coordinator.data is None:
+    def extra_state_attributes(self) -> dict[str, float | int | str | bool | None] | None:
+        data = self.coordinator.data
+        if data is None:
             return None
         return {
-            "last_audio_seconds": self.coordinator.data.last_stt_audio_seconds,
-            "last_tts_characters": self.coordinator.data.last_tts_characters,
+            "last_audio_seconds": data.last_stt_audio_seconds,
+            "last_tts_characters": data.last_tts_characters,
+            # The overlap is invisible in behaviour, so report it directly:
+            # speed_up_active is true only when the whole chain lined up.
+            "speed_up_requested": data.last_eager,
+            "satellite_identified": data.last_stt_device_id is not None,
+            "tts_source": data.last_tts_mode,
+            "speed_up_active": bool(data.last_eager) and data.last_tts_mode == "attached",
         }
