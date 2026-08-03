@@ -8,13 +8,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
 
-from .const import STATUS_TIMEOUT
+from .const import (
+    PCM_BYTES_PER_SAMPLE,
+    STATUS_TIMEOUT,
+    STT_TIMEOUT,
+    TTS_AUDIO_FORMAT,
+    TTS_TIMEOUT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +74,55 @@ class HomapelTimeoutError(HomapelApiError):
     """Request timed out."""
 
 
+class HomapelTurnNotFoundError(HomapelApiError):
+    """410 turn_not_found — expired, foreign, or already-claimed turn.
+
+    Only raised by Mode B TTS. The caller must fall back to Mode A with the
+    full text; this is a designed path, not an exceptional one.
+    """
+
+
+class HomapelPayloadTooLargeError(HomapelApiError):
+    """413 audio_too_long / text_too_long."""
+
+
+@dataclass(slots=True)
+class SttCapability:
+    """The ``stt`` block of /v1/units/status."""
+
+    enabled: bool
+    languages: list[str]
+    max_audio_seconds: int
+
+
+@dataclass(slots=True)
+class TtsVoice:
+    id: str
+    name: str
+
+
+@dataclass(slots=True)
+class TtsCapability:
+    """The ``tts`` block of /v1/units/status."""
+
+    enabled: bool
+    default_language: str
+    default_voice: str
+    languages: list[str]
+    voices: dict[str, list[TtsVoice]] = field(default_factory=dict)
+    max_characters: int = 5000
+
+
+@dataclass(slots=True)
+class SttResult:
+    text: str
+    language: str
+    turn_id: str | None
+    duration_ms: int
+    audio_seconds: float
+    provider_ms: int | None
+
+
 @dataclass(slots=True)
 class StatusResult:
     unit_id: str
@@ -78,6 +133,8 @@ class StatusResult:
     updated_at: str | None
     etag: str | None  # For If-None-Match on subsequent polls
     not_modified: bool = False  # True when server returned 304
+    stt: SttCapability | None = None
+    tts: TtsCapability | None = None
 
 
 class ConverseStream:
@@ -119,6 +176,10 @@ class ConverseStream:
         self.tokens_in: int = 0
         self.tokens_out: int = 0
         self.tier: str | None = None
+        # Present only when the cloud actually ran the TTS feed for this request
+        # (§6). Absence means "go straight to Mode A" — attaching without the
+        # advertisement is a guaranteed 410 round trip.
+        self.turn_id: str | None = None
 
     async def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
         try:
@@ -208,6 +269,62 @@ class ConverseStream:
             self.tokens_out = int(tokens.get("out", 0))
         if "tier" in data:
             self.tier = data["tier"]
+        if data.get("turn_id"):
+            self.turn_id = data["turn_id"]
+
+
+class TtsStream:
+    """Async-iterable of MP3 bytes from /v1/tts (Mode A or Mode B).
+
+    Errors are guaranteed to arrive before the first audio byte as a JSON
+    envelope, so status is checked up-front. After the first byte the only
+    failure signal is a closed connection, which surfaces as a network error
+    and is treated by callers as truncated audio.
+    """
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> None:
+        self._session = session
+        self._url = url
+        self._body = body
+        self._headers = headers
+        self._timeout = timeout
+        self.characters: int = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async with self._session.post(
+                self._url,
+                json=self._body,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+            ) as resp:
+                request_id = resp.headers.get("X-Request-Id")
+                if not (200 <= resp.status < 300):
+                    await _raise_for_error(resp, request_id)
+
+                raw = resp.headers.get("X-Homapel-Characters")
+                if raw and raw.isdigit():
+                    self.characters = int(raw)
+
+                async for chunk in resp.content.iter_chunked(4096):
+                    yield chunk
+        except asyncio.TimeoutError as err:
+            raise HomapelTimeoutError(str(err)) from err
+        except aiohttp.ClientError as err:
+            raise HomapelNetworkError(str(err)) from err
+
+    async def collect(self) -> bytes:
+        buffer = bytearray()
+        async for chunk in self:
+            buffer.extend(chunk)
+        return bytes(buffer)
 
 
 class HomapelCloudClient:
@@ -257,6 +374,8 @@ class HomapelCloudClient:
             cost_ceiling_reached=bool(data.get("cost_ceiling_reached", False)),
             updated_at=data.get("updated_at"),
             etag=resp_headers.get("ETag"),
+            stt=_parse_stt_capability(data.get("stt")),
+            tts=_parse_tts_capability(data.get("tts")),
         )
 
     async def register_webhook(self, api_key: str, webhook_url: str) -> None:
@@ -280,6 +399,7 @@ class HomapelCloudClient:
         device_id: str | None = None,
         area_id: str | None = None,
         speaker_id: str | None = None,
+        turn_id: str | None = None,
     ) -> ConverseStream:
         """§7.3.2 — open a converse request that yields assistant deltas.
 
@@ -294,6 +414,11 @@ class HomapelCloudClient:
         }
         if device_id is not None:
             body["device_id"] = device_id
+        if turn_id is not None:
+            # Unknown/expired/foreign/already-used ids are ignored silently by
+            # the cloud and the request runs normally from `text` — never an
+            # error, so this is always safe to send.
+            body["turn_id"] = turn_id
         if area_id is not None or speaker_id is not None:
             body["context"] = {}
             if area_id is not None:
@@ -313,6 +438,139 @@ class HomapelCloudClient:
             sock_read,
         )
 
+    async def transcribe(
+        self,
+        api_key: str,
+        *,
+        stream: AsyncIterable[bytes],
+        language: str,
+        sample_rate: int,
+        channels: int,
+        max_audio_seconds: int = 0,
+        device_id: str | None = None,
+        area_id: str | None = None,
+        eager: bool = False,
+        timeout: float = STT_TIMEOUT,
+    ) -> SttResult:
+        """§3 — stream raw PCM to /v1/stt and return the transcript.
+
+        The body is streamed with chunked transfer-encoding as HA produces it,
+        so the cloud can forward to the provider while the user is still
+        speaking. Nothing is buffered locally.
+
+        ``max_audio_seconds`` bounds the upload client-side. The cloud enforces
+        the same limit and may answer 413 mid-body, but stopping locally keeps
+        us off that path in the common case — aiohttp's handling of a response
+        that arrives while the request body is still being written is not
+        something to rely on for a routine limit.
+        """
+        params: dict[str, str] = {"language": language}
+        if device_id:
+            params["device_id"] = device_id
+        if area_id:
+            params["area_id"] = area_id
+        if eager:
+            params["eager"] = "true"
+
+        max_bytes = (
+            int(max_audio_seconds * sample_rate * channels * PCM_BYTES_PER_SAMPLE)
+            if max_audio_seconds > 0
+            else 0
+        )
+
+        async def _chunks() -> AsyncIterator[bytes]:
+            sent = 0
+            async for chunk in stream:
+                if not chunk:
+                    continue
+                if max_bytes and sent + len(chunk) >= max_bytes:
+                    remainder = max_bytes - sent
+                    if remainder > 0:
+                        yield bytes(chunk[:remainder])
+                    _LOGGER.warning(
+                        "Utterance exceeded %s s; truncating upload", max_audio_seconds
+                    )
+                    return
+                sent += len(chunk)
+                yield chunk
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "Content-Type": f"audio/L16; rate={sample_rate}; channels={channels}",
+        }
+
+        try:
+            async with self._session.post(
+                f"{self._api_base}/v1/stt",
+                params=params,
+                data=_chunks(),
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                request_id = resp.headers.get("X-Request-Id")
+                if not (200 <= resp.status < 300):
+                    await _raise_for_error(resp, request_id)
+                payload = await resp.json()
+        except asyncio.TimeoutError as err:
+            raise HomapelTimeoutError(str(err)) from err
+        except aiohttp.ClientError as err:
+            raise HomapelNetworkError(str(err)) from err
+
+        timings = payload.get("timings") or {}
+        provider_ms = timings.get("provider_ms")
+        return SttResult(
+            # Silence and Whisper hallucinations both come back as "" with a
+            # 200; the caller maps that to HA's "didn't understand".
+            text=payload.get("text") or "",
+            language=payload.get("language") or language,
+            turn_id=payload.get("turn_id"),
+            duration_ms=int(payload.get("duration_ms") or 0),
+            audio_seconds=float(payload.get("audio_seconds") or 0.0),
+            provider_ms=int(provider_ms) if isinstance(provider_ms, (int, float)) else None,
+        )
+
+    def synthesize(
+        self,
+        api_key: str,
+        *,
+        text: str | None = None,
+        language: str | None = None,
+        voice: str | None = None,
+        turn_id: str | None = None,
+        timeout: float = TTS_TIMEOUT,
+    ) -> TtsStream:
+        """§4/§5 — Mode A (``text``) or Mode B (``turn_id``) synthesis.
+
+        Mode B attaches to audio the cloud pre-synthesized during the converse
+        stream. Pass ``voice`` in Mode B only when it differs from the tenant
+        default: the feed cannot know the pipeline's voice choice at converse
+        time, so naming a different one makes the cloud discard its buffer and
+        re-synthesize (correct answer, one synthesis slower).
+        """
+        body: dict[str, Any] = {}
+        if turn_id is not None:
+            body["turn_id"] = turn_id
+        else:
+            body["text"] = text or ""
+            body["format"] = TTS_AUDIO_FORMAT
+            if language is not None:
+                body["language"] = language
+        if voice is not None:
+            body["voice"] = voice
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "audio/mpeg, application/json;q=0.9",
+        }
+        return TtsStream(
+            self._session,
+            f"{self._api_base}/v1/tts",
+            body,
+            headers,
+            timeout,
+        )
+
     async def _request(
         self,
         method: str,
@@ -323,7 +581,7 @@ class HomapelCloudClient:
         json: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
         allow_304: bool = False,
-    ) -> tuple[int, dict[str, Any], dict[str, str]]:
+    ) -> tuple[int, dict[str, Any], Mapping[str, str]]:
         url = f"{self._api_base}{path}"
         headers = {"Accept": "application/json"}
         if auth_key is not None:
@@ -341,7 +599,10 @@ class HomapelCloudClient:
             ) as resp:
                 request_id = resp.headers.get("X-Request-Id")
                 if resp.status == 304 and allow_304:
-                    return 304, {}, dict(resp.headers)
+                    # Returned as aiohttp's case-insensitive mapping, not a plain
+                    # dict: response header names are title-cased by the parser,
+                    # so `dict(...)["ETag"]` silently misses.
+                    return 304, {}, resp.headers
                 if 200 <= resp.status < 300:
                     payload: dict[str, Any] = {}
                     if resp.content_length != 0:
@@ -349,7 +610,7 @@ class HomapelCloudClient:
                             payload = await resp.json()
                         except (aiohttp.ContentTypeError, ValueError):
                             payload = {}
-                    return resp.status, payload, dict(resp.headers)
+                    return resp.status, payload, resp.headers
 
                 await _raise_for_error(resp, request_id)
                 # _raise_for_error always raises
@@ -384,6 +645,10 @@ async def _raise_for_error(
         raise HomapelAuthError(message, **ctx)
     if status == 403:
         raise HomapelForbiddenError(message, **ctx)
+    if status == 410:
+        raise HomapelTurnNotFoundError(message, **ctx)
+    if status == 413:
+        raise HomapelPayloadTooLargeError(message, **ctx)
     if status == 422 and code == "unit_not_active":
         raise HomapelUnitNotActiveError(message, **ctx)
     if status == 429:
@@ -393,6 +658,48 @@ async def _raise_for_error(
     if 500 <= status < 600:
         raise HomapelNetworkError(message, **ctx)
     raise HomapelApiError(message, **ctx)
+
+
+def _parse_stt_capability(raw: Any) -> SttCapability | None:
+    """Parse the ``stt`` status block. Absent/malformed → treated as disabled."""
+    if not isinstance(raw, dict):
+        return None
+    languages = [str(x) for x in raw.get("languages") or [] if x]
+    return SttCapability(
+        enabled=bool(raw.get("enabled", False)),
+        languages=languages,
+        max_audio_seconds=int(raw.get("max_audio_seconds") or 0),
+    )
+
+
+def _parse_tts_capability(raw: Any) -> TtsCapability | None:
+    """Parse the ``tts`` status block. Absent/malformed → treated as disabled."""
+    if not isinstance(raw, dict):
+        return None
+
+    voices: dict[str, list[TtsVoice]] = {}
+    for language, entries in (raw.get("voices") or {}).items():
+        if not isinstance(entries, list):
+            continue
+        parsed = [
+            TtsVoice(id=str(v["id"]), name=str(v.get("name") or v["id"]))
+            for v in entries
+            if isinstance(v, dict) and v.get("id")
+        ]
+        if parsed:
+            voices[str(language)] = parsed
+
+    # STT and TTS language sets can legitimately differ (e.g. en-GB is STT-only),
+    # so each entity is built strictly from its own block.
+    languages = [str(x) for x in raw.get("languages") or [] if x]
+    return TtsCapability(
+        enabled=bool(raw.get("enabled", False)),
+        default_language=str(raw.get("default_language") or ""),
+        default_voice=str(raw.get("default_voice") or ""),
+        languages=languages,
+        voices=voices,
+        max_characters=int(raw.get("max_characters") or 5000),
+    )
 
 
 def _map_error_payload(payload: dict[str, Any]) -> HomapelApiError:

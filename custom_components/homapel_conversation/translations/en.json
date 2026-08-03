@@ -28,10 +28,12 @@
         "title": "Homapel Conversation",
         "description": "Tune per-installation settings. Changes apply on the next utterance.",
         "data": {
-          "converse_sock_read": "Cloud idle timeout (seconds)"
+          "converse_sock_read": "Cloud idle timeout (seconds)",
+          "unified_pipeline": "Speed up spoken replies"
         },
         "data_description": {
-          "converse_sock_read": "Maximum time the cloud may go silent mid-request before the call is aborted. Bounds the model's think-time and gaps between streamed deltas; the request as a whole is unbounded so long answers won't be truncated."
+          "converse_sock_read": "Maximum time the cloud may go silent mid-request before the call is aborted. Bounds the model's think-time and gaps between streamed deltas; the request as a whole is unbounded so long answers won't be truncated.",
+          "unified_pipeline": "Lets the cloud start generating speech while the answer is still being written, so replies begin playing sooner. Applies only to voice pipelines that use Homapel for speech-to-text, conversation and text-to-speech together; other pipelines are unaffected. Turn off to make each step wait for the previous one."
         }
       }
     }
@@ -42,9 +44,16 @@
     },
     "sensor": {
       "tier": { "name": "Subscription tier" },
-      "latency": { "name": "Last cloud latency" }
+      "latency": { "name": "Last cloud latency" },
+      "stt_latency": { "name": "Last speech-to-text latency" }
     },
     "conversation": {
+      "homapel": { "name": "Homapel" }
+    },
+    "stt": {
+      "homapel": { "name": "Homapel" }
+    },
+    "tts": {
       "homapel": { "name": "Homapel" }
     }
   }

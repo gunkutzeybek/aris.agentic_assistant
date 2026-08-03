@@ -9,8 +9,14 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import HomapelApiError, HomapelCloudClient
+from .api import (
+    HomapelApiError,
+    HomapelCloudClient,
+    SttCapability,
+    TtsCapability,
+)
 from .const import DOMAIN, POLL_INTERVAL
+from .turns import TurnRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +32,13 @@ class HomapelState:
     last_error: str | None = None
     last_converse_at: datetime | None = None
     last_webhook_timestamp: str | None = None  # For §7.3.6 idempotency
+    # Voice capability blocks. Always present on a 200 from the current cloud;
+    # None means an older server (or a malformed block) — treated as disabled.
+    stt: SttCapability | None = None
+    tts: TtsCapability | None = None
+    last_stt_provider_ms: int | None = None
+    last_stt_audio_seconds: float | None = None
+    last_tts_characters: int | None = None
 
 
 class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
@@ -48,6 +61,8 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
         self._api_key = api_key
         self._unit_id = unit_id
         self._etag: str | None = None
+        # Correlates stt → conversation → tts for a single voice turn.
+        self.turns = TurnRegistry()
 
     @property
     def client(self) -> HomapelCloudClient:
@@ -81,6 +96,11 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_error=prev.last_error if prev else None,
             last_converse_at=prev.last_converse_at if prev else None,
             last_webhook_timestamp=prev.last_webhook_timestamp if prev else None,
+            stt=status.stt,
+            tts=status.tts,
+            last_stt_provider_ms=prev.last_stt_provider_ms if prev else None,
+            last_stt_audio_seconds=prev.last_stt_audio_seconds if prev else None,
+            last_tts_characters=prev.last_tts_characters if prev else None,
         )
 
     def async_apply_webhook_update(self, payload: dict[str, Any]) -> bool:
@@ -111,9 +131,29 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_error=self.data.last_error,
             last_converse_at=self.data.last_converse_at,
             last_webhook_timestamp=pushed_ts if isinstance(pushed_ts, str) else self.data.last_webhook_timestamp,
+            stt=self.data.stt,
+            tts=self.data.tts,
+            last_stt_provider_ms=self.data.last_stt_provider_ms,
+            last_stt_audio_seconds=self.data.last_stt_audio_seconds,
+            last_tts_characters=self.data.last_tts_characters,
         )
         self.async_set_updated_data(updated)
         return True
+
+    def record_stt(self, audio_seconds: float, provider_ms: int | None) -> None:
+        """Record metering/latency from the most recent /v1/stt call."""
+        if self.data is None:
+            return
+        self.data.last_stt_audio_seconds = audio_seconds
+        self.data.last_stt_provider_ms = provider_ms
+        self.async_update_listeners()
+
+    def record_tts(self, characters: int) -> None:
+        """Record billable character count from the most recent /v1/tts call."""
+        if self.data is None:
+            return
+        self.data.last_tts_characters = characters
+        self.async_update_listeners()
 
     def record_converse_latency(self, latency_ms: int, error: str | None = None) -> None:
         """Record latency/error of the most recent /v1/converse call."""

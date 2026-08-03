@@ -36,10 +36,12 @@ from .const import (
     CONF_API_KEY,
     CONF_CONVERSE_SOCK_READ,
     CONF_DEFAULT_LANGUAGE,
+    CONF_UNIFIED_PIPELINE,
     CONF_UNIT_ID,
     DEFAULT_API_BASE,
     DEFAULT_CONVERSE_SOCK_READ,
     DEFAULT_LANGUAGE,
+    DEFAULT_UNIFIED_PIPELINE,
     DOMAIN,
     SUPPORTED_LANGUAGES,
 )
@@ -120,11 +122,17 @@ class HomapelOptionsFlow(OptionsFlow):
         current_sock_read = self.config_entry.options.get(
             CONF_CONVERSE_SOCK_READ, DEFAULT_CONVERSE_SOCK_READ
         )
+        current_unified = self.config_entry.options.get(
+            CONF_UNIFIED_PIPELINE, DEFAULT_UNIFIED_PIPELINE
+        )
         schema = vol.Schema(
             {
                 vol.Required(
                     CONF_CONVERSE_SOCK_READ, default=current_sock_read
                 ): vol.All(vol.Coerce(int), vol.Range(min=10, max=600)),
+                vol.Required(
+                    CONF_UNIFIED_PIPELINE, default=current_unified
+                ): bool,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

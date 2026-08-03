@@ -17,6 +17,8 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.CONVERSATION,
+    Platform.STT,
+    Platform.TTS,
     Platform.BINARY_SENSOR,
     Platform.SENSOR,
 ]

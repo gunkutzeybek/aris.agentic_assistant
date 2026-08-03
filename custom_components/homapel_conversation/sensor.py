@@ -21,12 +21,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: HomapelCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            HomapelTierSensor(coordinator, entry),
-            HomapelHealthSensor(coordinator, entry),
-        ]
-    )
+    entities: list[SensorEntity] = [
+        HomapelTierSensor(coordinator, entry),
+        HomapelHealthSensor(coordinator, entry),
+    ]
+    if coordinator.data and coordinator.data.stt and coordinator.data.stt.enabled:
+        entities.append(HomapelVoiceLatencySensor(coordinator, entry))
+    async_add_entities(entities)
 
 
 class _HomapelSensorBase(CoordinatorEntity[HomapelCoordinator], SensorEntity):
@@ -77,4 +78,36 @@ class HomapelHealthSensor(_HomapelSensorBase):
         return {
             "last_error": self.coordinator.data.last_error,
             "last_converse_at": last_at.isoformat() if last_at else None,
+        }
+
+
+class HomapelVoiceLatencySensor(_HomapelSensorBase):
+    """Transcription tail — the latency the gateway itself adds.
+
+    `provider_ms` is measured from the last audio byte to the response, so it
+    excludes the upload (which tracks how long the user spoke). This is the
+    number to watch when judging whether the gateway is placed well.
+    """
+
+    _attr_name = "Last speech-to-text latency"
+    _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
+    _attr_device_class = SensorDeviceClass.DURATION
+
+    def __init__(self, coordinator: HomapelCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_stt_latency"
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.last_stt_provider_ms
+
+    @property
+    def extra_state_attributes(self) -> dict[str, float | int | None] | None:
+        if self.coordinator.data is None:
+            return None
+        return {
+            "last_audio_seconds": self.coordinator.data.last_stt_audio_seconds,
+            "last_tts_characters": self.coordinator.data.last_tts_characters,
         }
