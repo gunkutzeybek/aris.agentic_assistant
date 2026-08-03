@@ -21,6 +21,7 @@ CONF_DEFAULT_LANGUAGE: Final = "default_language"
 
 # Options-only (set via OptionsFlow, not part of §7.7.3 entry data).
 CONF_CONVERSE_SOCK_READ: Final = "converse_sock_read"
+CONF_UNIFIED_PIPELINE: Final = "unified_pipeline"
 
 DEFAULT_API_BASE: Final = "https://api.homapel.com"
 DEFAULT_LANGUAGE: Final = "tr"
@@ -35,6 +36,25 @@ POLL_INTERVAL: Final = timedelta(minutes=5)
 # the request as a whole is unbounded so long answers don't get truncated.
 DEFAULT_CONVERSE_SOCK_READ: Final = 90
 STATUS_TIMEOUT: Final = 5
+
+# --- Voice (VOICE_API_AS_BUILT.md) -------------------------------------------
+# `eager=true` is the consent flag that lets the cloud pre-synthesize TTS during
+# the converse stream. Only sent when the pipeline is Homapel end-to-end; see
+# stt.py::_eager_enabled. Users who deliberately mix engines can force it off.
+DEFAULT_UNIFIED_PIPELINE: Final = True
+
+STT_TIMEOUT: Final = 30
+TTS_TIMEOUT: Final = 60
+
+# Correlation window between pipeline stages. Matches the cloud's 30 s turn TTL —
+# a stale entry can only cost one wasted Mode B attempt that falls back to Mode A.
+TURN_TTL: Final = 30
+
+# The cloud implements mp3 only (§4); wav/opus return 422.
+TTS_AUDIO_FORMAT: Final = "mp3"
+
+# Assist streams 16-bit mono PCM; used to bound the upload client-side (§3).
+PCM_BYTES_PER_SAMPLE: Final = 2
 
 DORMANT_PROMPT: Final = {
     "tr": (

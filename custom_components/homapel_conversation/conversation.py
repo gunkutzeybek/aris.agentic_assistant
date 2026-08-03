@@ -113,6 +113,10 @@ class HomapelConversationEntity(
             sock_read=sock_read,
             device_id=user_input.device_id,
             area_id=area_id,
+            # Set when this turn came from Homapel STT. Lets the cloud
+            # pre-synthesize speech while the LLM streams; absent for typed
+            # input, which simply runs without the feed.
+            turn_id=self.coordinator.turns.take_transcript(user_input.text),
         )
         speech_parts: list[str] = []
         try:
@@ -168,7 +172,15 @@ class HomapelConversationEntity(
         if stream.dormant:
             await self.coordinator.async_request_refresh()
 
-        response.async_set_speech("".join(speech_parts))
+        speech = "".join(speech_parts)
+
+        # Only advertised when the cloud actually ran the TTS feed for this
+        # request. Without it a Mode B attach is a guaranteed 410 round trip,
+        # so the TTS entity goes straight to Mode A instead.
+        if stream.turn_id and speech:
+            self.coordinator.turns.remember_speech(speech, stream.turn_id)
+
+        response.async_set_speech(speech)
         return ConversationResult(
             response=response,
             conversation_id=stream.conversation_id or conversation_id,

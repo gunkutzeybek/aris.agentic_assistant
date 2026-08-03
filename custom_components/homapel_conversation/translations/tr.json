@@ -28,10 +28,12 @@
         "title": "Homapel Konuşma",
         "description": "Üniteye özel ayarlar. Değişiklikler bir sonraki konuşmadan itibaren geçerli olur.",
         "data": {
-          "converse_sock_read": "Bulut boşta kalma zaman aşımı (saniye)"
+          "converse_sock_read": "Bulut boşta kalma zaman aşımı (saniye)",
+          "unified_pipeline": "Sesli yanıtları hızlandır"
         },
         "data_description": {
-          "converse_sock_read": "Bulutun istek sırasında veri göndermeden geçirebileceği en uzun süre; bu süre aşılırsa istek iptal edilir. Modelin düşünme süresini ve akıştaki parçalar arasındaki boşlukları sınırlar; isteğin toplam süresi sınırsızdır, böylece uzun yanıtlar kesilmez."
+          "converse_sock_read": "Bulutun istek sırasında veri göndermeden geçirebileceği en uzun süre; bu süre aşılırsa istek iptal edilir. Modelin düşünme süresini ve akıştaki parçalar arasındaki boşlukları sınırlar; isteğin toplam süresi sınırsızdır, böylece uzun yanıtlar kesilmez.",
+          "unified_pipeline": "Bulutun, yanıt daha yazılırken sesi üretmeye başlamasını sağlar; böylece konuşma daha erken duyulur. Yalnızca konuşma tanıma, sohbet ve seslendirme adımlarının üçünde de Homapel kullanan ses hatlarında geçerlidir; diğer hatlar etkilenmez. Kapatırsanız her adım bir öncekini bekler."
         }
       }
     }
@@ -42,9 +44,16 @@
     },
     "sensor": {
       "tier": { "name": "Abonelik seviyesi" },
-      "latency": { "name": "Son bulut gecikmesi" }
+      "latency": { "name": "Son bulut gecikmesi" },
+      "stt_latency": { "name": "Son konuşma tanıma gecikmesi" }
     },
     "conversation": {
+      "homapel": { "name": "Homapel" }
+    },
+    "stt": {
+      "homapel": { "name": "Homapel" }
+    },
+    "tts": {
       "homapel": { "name": "Homapel" }
     }
   }
