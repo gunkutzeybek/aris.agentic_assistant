@@ -39,6 +39,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import HomapelCoordinator
+from .satellite import async_active_satellite_device, async_area_id_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,6 +101,12 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
         self, metadata: SpeechMetadata, stream: AsyncIterable[bytes]
     ) -> SpeechResult:
         capability = self.coordinator.data.stt if self.coordinator.data else None
+
+        # Must match what the conversation stage sends, or the cloud discards
+        # its speculative run every turn and the overlap is silently lost.
+        # Unresolvable is fine — that just costs the speculation.
+        device_id = async_active_satellite_device(self.hass)
+
         try:
             result = await self.coordinator.client.transcribe(
                 self.coordinator.api_key,
@@ -108,6 +115,8 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
                 sample_rate=int(metadata.sample_rate),
                 channels=int(metadata.channel),
                 max_audio_seconds=capability.max_audio_seconds if capability else 0,
+                device_id=device_id,
+                area_id=async_area_id_for(self.hass, device_id),
                 eager=self._eager_enabled(),
             )
         except HomapelApiError as err:

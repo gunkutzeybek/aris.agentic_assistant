@@ -39,6 +39,8 @@ class HomapelState:
     last_stt_provider_ms: int | None = None
     last_stt_audio_seconds: float | None = None
     last_tts_characters: int | None = None
+    last_tokens_in: int | None = None
+    last_tokens_out: int | None = None
 
 
 class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
@@ -101,6 +103,8 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_stt_provider_ms=prev.last_stt_provider_ms if prev else None,
             last_stt_audio_seconds=prev.last_stt_audio_seconds if prev else None,
             last_tts_characters=prev.last_tts_characters if prev else None,
+            last_tokens_in=prev.last_tokens_in if prev else None,
+            last_tokens_out=prev.last_tokens_out if prev else None,
         )
 
     def async_apply_webhook_update(self, payload: dict[str, Any]) -> bool:
@@ -136,9 +140,22 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_stt_provider_ms=self.data.last_stt_provider_ms,
             last_stt_audio_seconds=self.data.last_stt_audio_seconds,
             last_tts_characters=self.data.last_tts_characters,
+            last_tokens_in=self.data.last_tokens_in,
+            last_tokens_out=self.data.last_tokens_out,
         )
         self.async_set_updated_data(updated)
         return True
+
+    def record_tokens(self, tokens_in: int, tokens_out: int) -> None:
+        """Record LLM token usage from the converse ``meta`` event.
+
+        Attached (speculated) turns report usage the same way as cold ones.
+        """
+        if self.data is None:
+            return
+        self.data.last_tokens_in = tokens_in
+        self.data.last_tokens_out = tokens_out
+        self.async_update_listeners()
 
     def record_stt(self, audio_seconds: float, provider_ms: int | None) -> None:
         """Record metering/latency from the most recent /v1/stt call."""

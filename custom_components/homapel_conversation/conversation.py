@@ -13,7 +13,6 @@ from homeassistant.components.conversation import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import intent
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -41,6 +40,7 @@ from .const import (
     SUPPORTED_LANGUAGES,
 )
 from .coordinator import HomapelCoordinator
+from .satellite import async_area_id_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,7 +97,9 @@ class HomapelConversationEntity(
                 continue_conversation=False,
             )
 
-        area_id = self._area_id_for(user_input.device_id) if user_input.device_id else None
+        # Resolved through the same helper the STT stage uses: the cloud
+        # compares both values when validating its speculative run.
+        area_id = async_area_id_for(self.hass, user_input.device_id)
 
         sock_read = float(
             self._entry.options.get(
@@ -165,6 +167,7 @@ class HomapelConversationEntity(
             )
 
         self._record_latency(started, error=None)
+        self.coordinator.record_tokens(stream.tokens_in, stream.tokens_out)
 
         # Cloud can signal dormant per-request (§7.3.2) even if our cached
         # status is stale. Its speech already contains the activation prompt,
@@ -216,13 +219,6 @@ class HomapelConversationEntity(
         if short in SUPPORTED_LANGUAGES:
             return short
         return self._default_language
-
-    def _area_id_for(self, device_id: str | None) -> str | None:
-        if not device_id:
-            return None
-        registry = dr.async_get(self.hass)
-        device = registry.async_get(device_id)
-        return device.area_id if device else None
 
     def _record_latency(self, started: float, *, error: str | None) -> None:
         elapsed_ms = int((time.monotonic() - started) * 1000)

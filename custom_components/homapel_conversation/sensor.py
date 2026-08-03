@@ -71,13 +71,15 @@ class HomapelHealthSensor(_HomapelSensorBase):
         return self.coordinator.data.last_latency_ms
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None] | None:
+    def extra_state_attributes(self) -> dict[str, str | int | None] | None:
         if self.coordinator.data is None:
             return None
         last_at = self.coordinator.data.last_converse_at
         return {
             "last_error": self.coordinator.data.last_error,
             "last_converse_at": last_at.isoformat() if last_at else None,
+            "last_tokens_in": self.coordinator.data.last_tokens_in,
+            "last_tokens_out": self.coordinator.data.last_tokens_out,
         }
 
 
