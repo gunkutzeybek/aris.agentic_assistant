@@ -1,22 +1,38 @@
-"""Coordinator that keeps activation/tier state in sync with the cloud."""
+"""Coordinator that keeps activation/tier/connector state in sync with the cloud."""
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     HomapelApiError,
+    HomapelAuthError,
     HomapelCloudClient,
     SttCapability,
     TtsCapability,
 )
-from .const import DOMAIN, POLL_INTERVAL
+from .const import (
+    CONF_CONNECTOR_SOURCE,
+    DASHBOARD_URL,
+    DOMAIN,
+    ISSUE_HOME_NOT_CONNECTED,
+    ISSUE_HOME_UNREACHABLE,
+    POLL_INTERVAL,
+    UNREACHABLE_GRACE,
+)
 from .turns import TurnRegistry
+
+if TYPE_CHECKING:
+    from .connector import ConnectorManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +62,13 @@ class HomapelState:
     last_eager: bool | None = None
     last_stt_device_id: str | None = None
     last_tts_mode: str | None = None  # "attached" (fast path) | "standalone"
+    # Home connector as the cloud sees it (``connector`` block of /units/status).
+    # None = the cloud did not report it (older server).
+    connector_configured: bool | None = None
+    connector_reachable: bool | None = None
+    # When the cloud first reported configured-but-unreachable; drives the
+    # "home unreachable" repair issue after UNREACHABLE_GRACE.
+    connector_unreachable_since: datetime | None = None
 
 
 class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
@@ -57,12 +80,15 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
         client: HomapelCloudClient,
         api_key: str,
         unit_id: str,
+        *,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN} ({unit_id})",
             update_interval=POLL_INTERVAL,
+            config_entry=config_entry,
         )
         self._client = client
         self._api_key = api_key
@@ -70,6 +96,8 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
         self._etag: str | None = None
         # Correlates stt → conversation → tts for a single voice turn.
         self.turns = TurnRegistry()
+        # Attached by __init__ once the entry is set up; None while loading.
+        self.connector_manager: ConnectorManager | None = None
 
     @property
     def client(self) -> HomapelCloudClient:
@@ -82,18 +110,24 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
     async def _async_update_data(self) -> HomapelState:
         try:
             status = await self._client.get_status(self._api_key, etag=self._etag)
+        except HomapelAuthError as err:
+            # Rotated from the dashboard → HA starts the reauth flow for us.
+            raise ConfigEntryAuthFailed(str(err)) from err
         except HomapelApiError as err:
             raise UpdateFailed(f"cloud status fetch failed: {err}") from err
 
         if status.not_modified and self.data is not None:
             # 304 — keep the previous state, just refresh the "last poll OK" tracker
+            self._async_update_issues(self.data)
             return self.data
 
         if status.etag:
             self._etag = status.etag
 
         prev = self.data
-        return HomapelState(
+        connector_configured = status.connector.configured if status.connector else None
+        connector_reachable = status.connector.reachable if status.connector else None
+        state = HomapelState(
             active=status.active,
             tier=status.tier,
             unit_id=status.unit_id or self._unit_id,
@@ -113,7 +147,72 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_eager=prev.last_eager if prev else None,
             last_stt_device_id=prev.last_stt_device_id if prev else None,
             last_tts_mode=prev.last_tts_mode if prev else None,
+            connector_configured=connector_configured,
+            connector_reachable=connector_reachable,
+            connector_unreachable_since=_unreachable_since(
+                prev, connector_configured, connector_reachable
+            ),
         )
+        self._async_update_issues(state)
+        return state
+
+    # --- Home connector -----------------------------------------------------
+
+    @callback
+    def record_connector(self, *, configured: bool, reachable: bool) -> None:
+        """Apply the result of a PUT /v1/units/connector we just made."""
+        if self.data is None:
+            return
+        self.data.connector_configured = configured
+        self.data.connector_reachable = reachable
+        self.data.connector_unreachable_since = _unreachable_since(
+            self.data, configured, reachable
+        )
+        self._async_update_issues(self.data)
+        self.async_update_listeners()
+
+    @callback
+    def _async_update_issues(self, state: HomapelState) -> None:
+        """Raise / clear the two connector repair issues from the latest state."""
+        entry = self.config_entry
+        if entry is None:
+            return
+
+        not_connected = state.connector_configured is False or (
+            state.connector_configured is None
+            and not entry.data.get(CONF_CONNECTOR_SOURCE)
+        )
+        if not_connected:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_HOME_NOT_CONNECTED,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_HOME_NOT_CONNECTED,
+                translation_placeholders={"dashboard_url": DASHBOARD_URL},
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOME_NOT_CONNECTED)
+
+        unreachable = (
+            state.connector_configured is True
+            and state.connector_reachable is False
+            and state.connector_unreachable_since is not None
+            and dt_util.utcnow() - state.connector_unreachable_since >= UNREACHABLE_GRACE
+        )
+        if unreachable:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_HOME_UNREACHABLE,
+                is_fixable=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key=ISSUE_HOME_UNREACHABLE,
+                translation_placeholders={"dashboard_url": DASHBOARD_URL},
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOME_UNREACHABLE)
 
     def async_apply_webhook_update(self, payload: dict[str, Any]) -> bool:
         """Apply a cloud-pushed status change (§7.3.6).
@@ -153,6 +252,9 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             last_eager=self.data.last_eager,
             last_stt_device_id=self.data.last_stt_device_id,
             last_tts_mode=self.data.last_tts_mode,
+            connector_configured=self.data.connector_configured,
+            connector_reachable=self.data.connector_reachable,
+            connector_unreachable_since=self.data.connector_unreachable_since,
         )
         self.async_set_updated_data(updated)
         return True
@@ -200,5 +302,16 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
             return
         self.data.last_latency_ms = latency_ms
         self.data.last_error = error
-        self.data.last_converse_at = datetime.utcnow()
+        self.data.last_converse_at = dt_util.utcnow()
         self.async_update_listeners()
+
+
+def _unreachable_since(
+    prev: HomapelState | None, configured: bool | None, reachable: bool | None
+) -> datetime | None:
+    """Carry the first-seen-unreachable timestamp while the condition holds."""
+    if not (configured is True and reachable is False):
+        return None
+    if prev is not None and prev.connector_unreachable_since is not None:
+        return prev.connector_unreachable_since
+    return dt_util.utcnow()

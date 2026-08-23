@@ -14,7 +14,6 @@ from homeassistant.components.conversation import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import ulid as ulid_util
@@ -31,7 +30,6 @@ from .api import (
 from .const import (
     CONF_CONVERSE_SOCK_READ,
     CONF_DEFAULT_LANGUAGE,
-    CONF_UNIT_ID,
     DEFAULT_CONVERSE_SOCK_READ,
     DEFAULT_LANGUAGE,
     DOMAIN,
@@ -40,6 +38,7 @@ from .const import (
     SUPPORTED_LANGUAGES,
 )
 from .coordinator import HomapelCoordinator
+from .entity import homapel_device_info
 from .satellite import async_area_id_for
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,7 +59,7 @@ class HomapelConversationEntity(
     """Conversation agent that proxies to the Homapel cloud."""
 
     _attr_has_entity_name = True
-    _attr_name = "Homapel"
+    _attr_translation_key = "homapel"
     _attr_supported_features = conversation.ConversationEntityFeature(0)
 
     def __init__(self, coordinator: HomapelCoordinator, entry: ConfigEntry) -> None:
@@ -68,13 +67,7 @@ class HomapelConversationEntity(
         self._entry = entry
         self._default_language = entry.data.get(CONF_DEFAULT_LANGUAGE, DEFAULT_LANGUAGE)
         self._attr_unique_id = f"{entry.entry_id}_conversation"
-        unit_id = entry.data[CONF_UNIT_ID]
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, unit_id)},
-            name="Homapel Aris",
-            manufacturer="Homapel",
-            model="Aris",
-        )
+        self._attr_device_info = homapel_device_info(entry)
 
     @property
     def supported_languages(self) -> list[str]:

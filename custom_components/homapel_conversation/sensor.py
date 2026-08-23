@@ -5,12 +5,12 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_UNIT_ID, DOMAIN
+from .const import DOMAIN
 from .coordinator import HomapelCoordinator
+from .entity import homapel_device_info
 
 TIER_OPTIONS = ["dormant", "basic", "pro"]
 
@@ -35,12 +35,11 @@ class _HomapelSensorBase(CoordinatorEntity[HomapelCoordinator], SensorEntity):
 
     def __init__(self, coordinator: HomapelCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        unit_id = entry.data[CONF_UNIT_ID]
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, unit_id)})
+        self._attr_device_info = homapel_device_info(entry)
 
 
 class HomapelTierSensor(_HomapelSensorBase):
-    _attr_name = "Subscription tier"
+    _attr_translation_key = "tier"
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = TIER_OPTIONS
 
@@ -56,7 +55,7 @@ class HomapelTierSensor(_HomapelSensorBase):
 
 
 class HomapelHealthSensor(_HomapelSensorBase):
-    _attr_name = "Last cloud latency"
+    _attr_translation_key = "latency"
     _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
     _attr_device_class = SensorDeviceClass.DURATION
 
@@ -91,7 +90,7 @@ class HomapelVoiceLatencySensor(_HomapelSensorBase):
     number to watch when judging whether the gateway is placed well.
     """
 
-    _attr_name = "Last speech-to-text latency"
+    _attr_translation_key = "stt_latency"
     _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
     _attr_device_class = SensorDeviceClass.DURATION
 

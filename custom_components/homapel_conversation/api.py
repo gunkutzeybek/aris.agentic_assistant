@@ -1,25 +1,27 @@
-"""Async HTTP client for the Homapel cloud API.
+"""Async HTTP client for the Laris cloud API (``agentic_service``).
 
-Implements Boundary A as defined in ARCHITECTURE.md §7.3. Parses the
-standard error envelope from §7.2 and maps error codes to typed exceptions.
+Every call authenticates with the unit API key as a Bearer token. Error bodies
+are ``{"error": {"code", "message"}}`` and are mapped to the typed exceptions
+below; ``X-Request-Id`` is captured into each exception for support.
 """
 from __future__ import annotations
 
-import asyncio
-import json
-import logging
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from dataclasses import dataclass, field
+import json
+import logging
 from typing import Any
 
 import aiohttp
 
 from .const import (
+    CONNECTOR_TIMEOUT,
     PCM_BYTES_PER_SAMPLE,
     STATUS_TIMEOUT,
     STT_TIMEOUT,
     TTS_AUDIO_FORMAT,
     TTS_TIMEOUT,
+    TUNNEL_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +88,51 @@ class HomapelPayloadTooLargeError(HomapelApiError):
     """413 audio_too_long / text_too_long."""
 
 
+class HomapelInvalidRequestError(HomapelApiError):
+    """422 other than unit_not_active — e.g. ``invalid_mcp_url``."""
+
+
+class HomapelTunnelNotConfiguredError(HomapelApiError):
+    """501 tunnel_not_configured — this cloud cannot issue tunnels."""
+
+
+@dataclass(slots=True)
+class ConnectorSummary:
+    """The ``connector`` block of /v1/units/status."""
+
+    configured: bool
+    reachable: bool
+
+
+@dataclass(slots=True)
+class ConnectorProbeResult:
+    """Response of PUT /v1/units/connector — the cloud's synchronous probe."""
+
+    reachable: bool
+    checked_at: str | None
+    error: str | None = None
+    tool_count: int | None = None
+
+
+@dataclass(slots=True)
+class ConnectorStatus:
+    """Response of GET /v1/units/connector — stored state, no probe."""
+
+    configured: bool
+    reachable: bool
+    source: str | None = None
+    last_ok_at: str | None = None
+    last_error: str | None = None
+
+
+@dataclass(slots=True)
+class TunnelResult:
+    """Response of POST /v1/units/tunnel."""
+
+    hostname: str
+    tunnel_token: str
+
+
 @dataclass(slots=True)
 class SttCapability:
     """The ``stt`` block of /v1/units/status."""
@@ -135,6 +182,8 @@ class StatusResult:
     not_modified: bool = False  # True when server returned 304
     stt: SttCapability | None = None
     tts: TtsCapability | None = None
+    # None on a cloud that predates the connector block.
+    connector: ConnectorSummary | None = None
 
 
 class ConverseStream:
@@ -202,7 +251,7 @@ class ConverseStream:
                     payload = await resp.json()
                     self._populate_meta(payload)
                     yield {"role": "assistant", "content": payload["speech"]}
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise HomapelTimeoutError(str(err)) from err
         except aiohttp.ClientError as err:
             raise HomapelNetworkError(str(err)) from err
@@ -315,7 +364,7 @@ class TtsStream:
 
                 async for chunk in resp.content.iter_chunked(4096):
                     yield chunk
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise HomapelTimeoutError(str(err)) from err
         except aiohttp.ClientError as err:
             raise HomapelNetworkError(str(err)) from err
@@ -376,6 +425,7 @@ class HomapelCloudClient:
             etag=resp_headers.get("ETag"),
             stt=_parse_stt_capability(data.get("stt")),
             tts=_parse_tts_capability(data.get("tts")),
+            connector=_parse_connector_summary(data.get("connector")),
         )
 
     async def register_webhook(self, api_key: str, webhook_url: str) -> None:
@@ -387,6 +437,92 @@ class HomapelCloudClient:
             timeout=STATUS_TIMEOUT,
             auth_key=api_key,
         )
+
+    # --- Home connector -----------------------------------------------------
+
+    async def put_connector(
+        self,
+        api_key: str,
+        *,
+        mcp_url: str,
+        bearer: str,
+        source: str,
+        ha_version: str | None = None,
+        component_version: str | None = None,
+    ) -> ConnectorProbeResult:
+        """Register how the cloud reaches this home's ha-mcp endpoint.
+
+        The cloud stores the URL + bearer and probes ``tools/list`` before it
+        answers, so the result already says whether the home is reachable.
+        An unreachable home is *stored* all the same — the caller decides
+        whether to retry or finish.
+        """
+        body: dict[str, Any] = {
+            "mcp_url": mcp_url,
+            "bearer": bearer,
+            "source": source,
+        }
+        if ha_version:
+            body["ha_version"] = ha_version
+        if component_version:
+            body["component_version"] = component_version
+        _, data, _ = await self._request(
+            "PUT",
+            "/v1/units/connector",
+            json=body,
+            timeout=CONNECTOR_TIMEOUT,
+            auth_key=api_key,
+        )
+        tool_count = data.get("tool_count")
+        return ConnectorProbeResult(
+            reachable=bool(data.get("reachable", False)),
+            checked_at=data.get("checked_at"),
+            error=data.get("error"),
+            tool_count=int(tool_count) if isinstance(tool_count, int) else None,
+        )
+
+    async def get_connector(self, api_key: str) -> ConnectorStatus:
+        """Stored connector status — no probe, no HA round trip."""
+        _, data, _ = await self._request(
+            "GET",
+            "/v1/units/connector",
+            timeout=STATUS_TIMEOUT,
+            auth_key=api_key,
+        )
+        return ConnectorStatus(
+            configured=bool(data.get("configured", False)),
+            reachable=bool(data.get("reachable", False)),
+            source=data.get("source"),
+            last_ok_at=data.get("last_ok_at"),
+            last_error=data.get("last_error"),
+        )
+
+    async def delete_connector(self, api_key: str) -> None:
+        """Forget the connector (integration removed)."""
+        await self._request(
+            "DELETE",
+            "/v1/units/connector",
+            timeout=STATUS_TIMEOUT,
+            auth_key=api_key,
+        )
+
+    async def create_tunnel(self, api_key: str) -> TunnelResult:
+        """Issue (or re-issue) this home's cloud-managed Cloudflare tunnel.
+
+        Raises ``HomapelTunnelNotConfiguredError`` when the cloud has no
+        Cloudflare credentials — the caller falls back to a manual URL.
+        """
+        _, data, _ = await self._request(
+            "POST",
+            "/v1/units/tunnel",
+            timeout=TUNNEL_TIMEOUT,
+            auth_key=api_key,
+        )
+        hostname = data.get("hostname")
+        token = data.get("tunnel_token")
+        if not hostname or not token:
+            raise HomapelApiError("tunnel response missing hostname/tunnel_token")
+        return TunnelResult(hostname=str(hostname), tunnel_token=str(token))
 
     def converse_stream(
         self,
@@ -512,7 +648,7 @@ class HomapelCloudClient:
                 if not (200 <= resp.status < 300):
                     await _raise_for_error(resp, request_id)
                 payload = await resp.json()
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise HomapelTimeoutError(str(err)) from err
         except aiohttp.ClientError as err:
             raise HomapelNetworkError(str(err)) from err
@@ -604,18 +740,20 @@ class HomapelCloudClient:
                     # so `dict(...)["ETag"]` silently misses.
                     return 304, {}, resp.headers
                 if 200 <= resp.status < 300:
-                    payload: dict[str, Any] = {}
-                    if resp.content_length != 0:
-                        try:
-                            payload = await resp.json()
-                        except (aiohttp.ContentTypeError, ValueError):
-                            payload = {}
+                    # 204 / empty bodies (DELETE) decode to None or raise —
+                    # both mean "no payload".
+                    try:
+                        payload = await resp.json()
+                    except (aiohttp.ContentTypeError, ValueError):
+                        payload = None
+                    if not isinstance(payload, dict):
+                        payload = {}
                     return resp.status, payload, resp.headers
 
                 await _raise_for_error(resp, request_id)
                 # _raise_for_error always raises
                 raise HomapelApiError("unreachable")
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise HomapelTimeoutError(str(err)) from err
         except aiohttp.ClientError as err:
             raise HomapelNetworkError(str(err)) from err
@@ -649,12 +787,16 @@ async def _raise_for_error(
         raise HomapelTurnNotFoundError(message, **ctx)
     if status == 413:
         raise HomapelPayloadTooLargeError(message, **ctx)
-    if status == 422 and code == "unit_not_active":
-        raise HomapelUnitNotActiveError(message, **ctx)
+    if status == 422:
+        if code == "unit_not_active":
+            raise HomapelUnitNotActiveError(message, **ctx)
+        raise HomapelInvalidRequestError(message, **ctx)
     if status == 429:
         if code == "cost_ceiling_exceeded":
             raise HomapelCostCeilingError(message, **ctx)
         raise HomapelRateLimitedError(message, retry_after=retry_after, **ctx)
+    if status == 501:
+        raise HomapelTunnelNotConfiguredError(message, **ctx)
     if 500 <= status < 600:
         raise HomapelNetworkError(message, **ctx)
     raise HomapelApiError(message, **ctx)
@@ -669,6 +811,16 @@ def _parse_stt_capability(raw: Any) -> SttCapability | None:
         enabled=bool(raw.get("enabled", False)),
         languages=languages,
         max_audio_seconds=int(raw.get("max_audio_seconds") or 0),
+    )
+
+
+def _parse_connector_summary(raw: Any) -> ConnectorSummary | None:
+    """Parse the ``connector`` status block. Absent → None (older cloud)."""
+    if not isinstance(raw, dict):
+        return None
+    return ConnectorSummary(
+        configured=bool(raw.get("configured", False)),
+        reachable=bool(raw.get("reachable", False)),
     )
 
 
