@@ -61,6 +61,7 @@ from .const import (
     MCP_ENTRY_TYPE_SERVER,
     MCP_OPT_ENABLE_WEBHOOK,
     MCP_OPT_WEBHOOK_AUTH,
+    MCP_RELOAD_GRACE,
     MCP_WEBHOOK_AUTH_HA,
     MCP_WEBHOOK_STARTUP_WAIT_TIMEOUT,
 )
@@ -133,6 +134,67 @@ def async_enable_mcp_ha_auth(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         MCP_OPT_ENABLE_WEBHOOK: True,
     }
     return hass.config_entries.async_update_entry(entry, options=new_options)
+
+
+class McpReloadWatcher:
+    """Notices the ha-mcp entry going through a reload.
+
+    HA dispatches ``SIGNAL_CONFIG_ENTRY_CHANGED`` on every state transition, so
+    "left LOADED, then came back to LOADED" is observable — and with eager task
+    start the whole reload may even run inside ``async_update_entry`` itself,
+    before the caller gets control back. Subscribe *before* changing options.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        self._entry_id = entry_id
+        self._left_loaded = False
+        self._reloaded = asyncio.Event()
+        self._unsub = async_dispatcher_connect(
+            hass, SIGNAL_CONFIG_ENTRY_CHANGED, self._async_changed
+        )
+
+    @callback
+    def _async_changed(self, change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        if entry.entry_id != self._entry_id or change is not ConfigEntryChange.UPDATED:
+            return
+        if entry.state is not ConfigEntryState.LOADED:
+            self._left_loaded = True
+        elif self._left_loaded:
+            self._reloaded.set()
+
+    async def async_wait_for_reload(self, grace: float) -> bool:
+        """Wait until the entry has reloaded; False if it never started within ``grace``."""
+        try:
+            async with asyncio.timeout(grace):
+                await self._reloaded.wait()
+        except TimeoutError:
+            return False
+        return True
+
+    @callback
+    def async_unsubscribe(self) -> None:
+        self._unsub()
+
+
+async def async_enable_mcp_ha_auth_and_wait(
+    hass: HomeAssistant, entry: ConfigEntry, timeout: float
+) -> str | None:
+    """Switch ha-mcp to ha_auth, let it reload, and wait for its webhook.
+
+    Without the reload watch the old (pre-reload) LOADED state and the old
+    webhook registration would satisfy the wait immediately and the cloud
+    would probe a server that is mid-restart. Returns the live webhook id
+    or ``None`` on timeout.
+    """
+    watcher = McpReloadWatcher(hass, entry.entry_id)
+    try:
+        if async_enable_mcp_ha_auth(hass, entry) and not await watcher.async_wait_for_reload(
+            MCP_RELOAD_GRACE
+        ):
+            _LOGGER.debug("ha-mcp did not reload after the options change; continuing")
+    finally:
+        watcher.async_unsubscribe()
+    return await async_wait_for_mcp_webhook(hass, entry.entry_id, timeout)
 
 
 async def async_wait_for_mcp_webhook(

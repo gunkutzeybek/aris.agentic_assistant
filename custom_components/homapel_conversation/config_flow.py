@@ -58,7 +58,7 @@ from .connector import (
     ConnectorRegistration,
     async_can_use_tunnel,
     async_detect_base_url,
-    async_enable_mcp_ha_auth,
+    async_enable_mcp_ha_auth_and_wait,
     async_find_mcp_server_entry,
     async_is_webhook_live,
     async_mcp_needs_options_change,
@@ -172,6 +172,7 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
             "min_ha_version": MCP_MIN_HA_VERSION,
             "error": self._last_error,
             "base_url": self._base_url or "",
+            "example_url": "https://home.example.com",
         }
 
     # --- step: user ---------------------------------------------------------
@@ -264,13 +265,19 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self.hass.config_entries.async_get_entry(self._mcp_entry_id)
         if entry is None:
             return await self.async_step_mcp_check()
-        async_enable_mcp_ha_auth(self.hass, entry)
+        self._task = self.hass.async_create_task(
+            async_enable_mcp_ha_auth_and_wait(self.hass, entry, MCP_WEBHOOK_WAIT_TIMEOUT)
+        )
         return await self.async_step_mcp_wait()
 
     async def async_step_mcp_wait(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Wait for ha-mcp to (re)load and register its webhook."""
+        """Wait for ha-mcp to (re)load and register its webhook.
+
+        The task is either the enable-auth-and-wait one created by the previous
+        step, or a plain wait when the options were already right.
+        """
         assert self._mcp_entry_id is not None
         if self._task is None:
             self._task = self.hass.async_create_task(
@@ -385,7 +392,10 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Ask for the public https base URL of this Home Assistant."""
         errors: dict[str, str] = {}
-        if user_input is not None:
+        # When a progress task finishes before the frontend polls, HA re-enters
+        # the next step with the *previous* step's input — only a submission of
+        # this form carries ``base_url``.
+        if user_input is not None and CONF_BASE_URL in user_input:
             base_url = normalize_base_url(user_input[CONF_BASE_URL])
             if not is_https_url(base_url):
                 errors[CONF_BASE_URL] = "invalid_url"
@@ -477,10 +487,20 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_skip_connector(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Finish without a connector; the repair issue brings the customer back."""
+        """Finish without a connector; the repair issue brings the customer back.
+
+        When reconfiguring a home that *had* a connector, the cloud is told to
+        forget it too — otherwise it would keep dialing a dead endpoint and
+        keep reporting the home as connected.
+        """
         self._registration = None
         self._base_url = None
         self._source = None
+        if self.source == SOURCE_RECONFIGURE and self._data.get(CONF_CONNECTOR_SOURCE):
+            try:
+                await self._client().delete_connector(self._data[CONF_API_KEY])
+            except HomapelApiError as err:
+                _LOGGER.warning("Could not clear the connector on the cloud: %s", err)
         return await self.async_step_finish()
 
     async def async_step_finish_anyway(
@@ -556,11 +576,22 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Re-run only the connector part (new base URL, regenerated webhook id)."""
+        """Re-run only the connector part (new base URL, regenerated webhook id).
+
+        Shown as a confirmation form first: the initial step of a flow must not
+        run straight into a progress step (the frontend has no rendering for a
+        ``progress_done`` result coming back from flow creation).
+        """
         entry = self._get_reconfigure_entry()
         self._data = dict(entry.data)
         self._base_url = entry.data.get(CONF_CONNECTOR_BASE_URL)
         self._source = entry.data.get(CONF_CONNECTOR_SOURCE)
+        if user_input is None:
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=vol.Schema({}),
+                description_placeholders=self._placeholders,
+            )
         return await self.async_step_mcp_check()
 
 

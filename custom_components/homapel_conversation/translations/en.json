@@ -71,7 +71,7 @@
       },
       "manual_url": {
         "title": "Public address of this Home Assistant",
-        "description": "Laris could not find a public address for this Home Assistant (no Home Assistant Cloud remote access, no https external URL). Enter the https address this Home Assistant is reachable at from the internet, for example https://home.example.com. {error}",
+        "description": "Laris could not find a public address for this Home Assistant (no Home Assistant Cloud remote access, no https external URL). Enter the https address this Home Assistant is reachable at from the internet, for example {example_url}. {error}",
         "data": {
           "base_url": "Public https address"
         },
@@ -105,6 +105,10 @@
         "data": {
           "api_key": "API key"
         }
+      },
+      "reconfigure": {
+        "title": "Re-check the home connection",
+        "description": "Laris will look for the HA-MCP Server again, find the public address of this Home Assistant ({base_url} today) and register it with the cloud. Continue to re-run the connection setup."
       }
     },
     "progress": {
@@ -118,7 +122,7 @@
       "timeout": "Timed out contacting the Laris cloud.",
       "cannot_connect": "Could not reach the Laris cloud. Check the internet connection.",
       "unknown": "Unexpected error. Please try again.",
-      "invalid_url": "Enter a full https address, for example https://home.example.com."
+      "invalid_url": "Enter a full https address, for example {example_url}."
     },
     "abort": {
       "already_configured": "This home is already configured.",
@@ -155,8 +159,12 @@
   },
   "entity": {
     "binary_sensor": {
-      "active": { "name": "Active" },
-      "home_connected": { "name": "Home connected" }
+      "active": {
+        "name": "Active"
+      },
+      "home_connected": {
+        "name": "Home connected"
+      }
     },
     "sensor": {
       "tier": {
@@ -167,17 +175,27 @@
           "pro": "Pro"
         }
       },
-      "latency": { "name": "Last cloud latency" },
-      "stt_latency": { "name": "Last speech-to-text latency" }
+      "latency": {
+        "name": "Last cloud latency"
+      },
+      "stt_latency": {
+        "name": "Last speech-to-text latency"
+      }
     },
     "conversation": {
-      "homapel": { "name": "Homapel" }
+      "homapel": {
+        "name": "Homapel"
+      }
     },
     "stt": {
-      "homapel": { "name": "Homapel" }
+      "homapel": {
+        "name": "Homapel"
+      }
     },
     "tts": {
-      "homapel": { "name": "Homapel" }
+      "homapel": {
+        "name": "Homapel"
+      }
     }
   }
 }

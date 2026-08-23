@@ -67,6 +67,9 @@ MCP_MIN_HA_VERSION: Final = "2026.6.0"
 # How long to wait for ha-mcp to bring its webhook up after we flip its options
 # (the first bring-up pip-installs the server and can take minutes).
 MCP_WEBHOOK_WAIT_TIMEOUT: Final = 300
+# How long to wait for ha-mcp to *start* reloading after we change its options
+# (its update listener runs as a task; normally it has begun within a tick).
+MCP_RELOAD_GRACE: Final = 10
 # At HA start the bring-up may still be installing; wait longer before the
 # re-probe so the cloud does not record a spurious "unreachable".
 MCP_WEBHOOK_STARTUP_WAIT_TIMEOUT: Final = 900
