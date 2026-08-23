@@ -64,6 +64,7 @@ from .connector import (
     async_mcp_needs_options_change,
     async_mcp_webhook_id,
     async_register_connector,
+    async_revoke_cloud_credential,
     async_wait_for_mcp_webhook,
     is_https_url,
     normalize_base_url,
@@ -136,11 +137,31 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         self._registration: ConnectorRegistration | None = None
         self._last_error: str = ""
         self._task: asyncio.Task[Any] | None = None
+        # Credential the entry being reconfigured already owns (None for a new
+        # entry) vs. one minted by this flow that no entry owns yet.
+        self._owned_credential: tuple[str, str] | None = None
+        self._orphan_credential: tuple[str, str] | None = None
+        self._finished = False
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         return HomapelOptionsFlow()
+
+    @callback
+    def async_remove(self) -> None:
+        """The flow was dropped (dialog closed, timeout) before an entry owned the
+        credential: revoke the "Laris Cloud" user + token so nothing is orphaned."""
+        if self._finished or self._orphan_credential is None:
+            return
+        user_id, refresh_token_id = self._orphan_credential
+        self._orphan_credential = None
+        self.hass.async_create_task(
+            async_revoke_cloud_credential(
+                self.hass, user_id=user_id, refresh_token_id=refresh_token_id
+            ),
+            "homapel_revoke_orphan_credential",
+        )
 
     # --- shared helpers -----------------------------------------------------
 
@@ -221,6 +242,10 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_mcp_missing()
         self._mcp_entry_id = entry.entry_id
 
+        if entry.state in (ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.SETUP_RETRY):
+            # Still coming up (HA just started, or a retry is scheduled): wait
+            # rather than bouncing the customer to "check again".
+            return await self.async_step_mcp_wait()
         if entry.state is not ConfigEntryState.LOADED:
             return await self.async_step_mcp_not_loaded()
 
@@ -255,7 +280,10 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Ask before switching the HA-MCP server to ha_auth (it reloads)."""
-        if user_input is None:
+        # The schema is empty, so a genuine confirmation is exactly ``{}``; a
+        # non-empty dict is a previous step's input replayed after an eager
+        # progress step and must not count as consent.
+        if user_input is None or user_input:
             return self.async_show_form(
                 step_id="mcp_enable_auth",
                 data_schema=vol.Schema({}),
@@ -303,6 +331,11 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         if webhook_id is None:
             return self.async_show_progress_done(next_step_id="mcp_not_loaded")
         self._webhook_id = webhook_id
+        mcp_entry = self.hass.config_entries.async_get_entry(self._mcp_entry_id)
+        if mcp_entry is not None and async_mcp_needs_options_change(mcp_entry):
+            # Reached the wait before the options check (entry was still
+            # setting up): now that it is loaded, run the ha_auth step.
+            return self.async_show_progress_done(next_step_id="mcp_enable_auth")
         return self.async_show_progress_done(next_step_id="connector_url")
 
     # --- step: base URL -----------------------------------------------------
@@ -328,7 +361,8 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         except TunnelError as err:
             self._last_error = str(err)
             return await self.async_step_tunnel_failed()
-        if existing:
+        if existing and self._source != CONNECTOR_SOURCE_TUNNEL:
+            # Not ours (a reconfigure of a tunnel home re-issues the same tunnel).
             return await self.async_step_tunnel_replace()
         return await self.async_step_tunnel_install()
 
@@ -446,6 +480,10 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         self._registration = registration
         self._data[CONF_CLOUD_USER_ID] = registration.credential.user_id
         self._data[CONF_CLOUD_REFRESH_TOKEN_ID] = registration.credential.refresh_token_id
+        minted = (registration.credential.user_id, registration.credential.refresh_token_id)
+        if minted != self._owned_credential:
+            # Owned by no entry until the flow finishes — see async_remove.
+            self._orphan_credential = minted
         if registration.result.reachable:
             return self.async_show_progress_done(next_step_id="finish")
         self._last_error = registration.result.error or ""
@@ -532,6 +570,7 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
                 translation_placeholders={"dashboard_url": DASHBOARD_URL},
             )
 
+        self._finished = True
         if self.source == SOURCE_RECONFIGURE:
             return self.async_update_reload_and_abort(
                 self._get_reconfigure_entry(), data=data
@@ -586,7 +625,12 @@ class HomapelConfigFlow(ConfigFlow, domain=DOMAIN):
         self._data = dict(entry.data)
         self._base_url = entry.data.get(CONF_CONNECTOR_BASE_URL)
         self._source = entry.data.get(CONF_CONNECTOR_SOURCE)
-        if user_input is None:
+        if entry.data.get(CONF_CLOUD_USER_ID) and entry.data.get(CONF_CLOUD_REFRESH_TOKEN_ID):
+            self._owned_credential = (
+                entry.data[CONF_CLOUD_USER_ID],
+                entry.data[CONF_CLOUD_REFRESH_TOKEN_ID],
+            )
+        if user_input is None or user_input:
             return self.async_show_form(
                 step_id="reconfigure",
                 data_schema=vol.Schema({}),

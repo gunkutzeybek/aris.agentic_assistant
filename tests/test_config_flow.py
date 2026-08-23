@@ -600,3 +600,78 @@ async def test_connector_invalid_url_falls_back_to_manual(
     body = _last_put(cloud)
     assert body["mcp_url"] == f"{MANUAL_URL}/api/webhook/{MCP_WEBHOOK_ID}"
     assert body["source"] == CONNECTOR_SOURCE_MANUAL
+
+
+# --- 12. an abandoned flow leaves no orphan credential ------------------------------
+
+
+async def _laris_cloud_users(hass: HomeAssistant) -> list[Any]:
+    return [u for u in await hass.auth.async_get_users() if u.name == "Laris Cloud"]
+
+
+async def test_abandoned_flow_revokes_the_minted_credential(
+    hass: HomeAssistant, cloud: CloudMock, mcp_entry: ConfigEntry, external_url: str
+) -> None:
+    cloud.connector_response = {
+        "reachable": False,
+        "checked_at": "2026-08-23T00:00:01Z",
+        "error": "timeout",
+    }
+    result = await _start_and_submit(hass)
+    assert result["step_id"] == "connector_unreachable"
+    # The credential exists at this point (it was sent to the cloud) …
+    (user,) = await _laris_cloud_users(hass)
+    bearer = _last_put(cloud)["bearer"]
+    assert hass.auth.async_validate_access_token(bearer) is not None
+
+    # … but the customer closes the dialog instead of finishing.
+    hass.config_entries.flow.async_abort(result["flow_id"])
+    await hass.async_block_till_done()
+
+    assert await _laris_cloud_users(hass) == []
+    assert await hass.auth.async_get_user(user.id) is None
+    assert hass.auth.async_validate_access_token(bearer) is None
+
+
+async def test_finished_flow_keeps_the_credential(
+    hass: HomeAssistant, cloud: CloudMock, mcp_entry: ConfigEntry, external_url: str
+) -> None:
+    result = await _start_and_submit(hass)
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    await hass.async_block_till_done()
+    (user,) = await _laris_cloud_users(hass)
+    assert user.id == result["data"][CONF_CLOUD_USER_ID]
+    assert hass.auth.async_validate_access_token(_last_put(cloud)["bearer"]) is not None
+
+
+# --- 13. HA-MCP still starting up is waited for, not bounced -----------------------
+
+
+async def test_mcp_entry_in_setup_retry_is_waited_for(
+    hass: HomeAssistant,
+    cloud: CloudMock,
+    mcp_integration: McpSetup,
+    mcp_gate: dict[str, bool],
+    external_url: str,
+) -> None:
+    mcp = make_mcp_entry()
+    mcp.add_to_hass(hass)
+    mcp_gate["ready"] = False
+    await mcp_integration(mcp)
+    assert mcp.state is ConfigEntryState.SETUP_RETRY
+
+    with patch("custom_components.homapel_conversation.connector._WAIT_POLL_SECONDS", 0.01):
+        result = await _start_flow(hass)
+        result = await _submit_key(hass, result["flow_id"])
+        assert result["type"] is FlowResultType.SHOW_PROGRESS, result
+        assert result["step_id"] == "mcp_wait"
+
+        # The server finishes installing and HA's retry loads the entry.
+        mcp_gate["ready"] = True
+        await hass.config_entries.async_reload(mcp.entry_id)
+        assert mcp.state is ConfigEntryState.LOADED
+        result = await _drive(hass, result)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert result["data"][CONF_MCP_WEBHOOK_ID] == MCP_WEBHOOK_ID
+    assert result["data"][CONF_CONNECTOR_SOURCE] == CONNECTOR_SOURCE_EXTERNAL_URL

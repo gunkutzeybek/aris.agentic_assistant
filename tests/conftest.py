@@ -19,8 +19,9 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 )
 
 from homeassistant.components import webhook
-from homeassistant.config_entries import ConfigEntry, ConfigFlow
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigFlow
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.setup import async_setup_component
 
 from custom_components.homapel_conversation.const import (
@@ -189,8 +190,14 @@ async def _mcp_webhook_handler(hass: HomeAssistant, webhook_id: str, request: Re
 
 
 @pytest.fixture
+def mcp_gate() -> dict[str, bool]:
+    """Flip ``ready`` to False to make the fake ha_mcp_tools raise ConfigEntryNotReady."""
+    return {"ready": True}
+
+
+@pytest.fixture
 async def mcp_integration(
-    hass: HomeAssistant,
+    hass: HomeAssistant, mcp_gate: dict[str, bool]
 ) -> AsyncIterator[Callable[[ConfigEntry], Awaitable[None]]]:
     """Register a fake ``ha_mcp_tools`` that behaves like the real server entry:
 
@@ -203,6 +210,8 @@ async def mcp_integration(
         await hass.config_entries.async_reload(entry.entry_id)
 
     async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+        if not mcp_gate["ready"]:
+            raise ConfigEntryNotReady("server still installing")
         webhook_id = entry.data.get(MCP_DATA_WEBHOOK_ID)
         if webhook_id and entry.options.get(MCP_OPT_ENABLE_WEBHOOK, True):
             webhook.async_register(
@@ -231,6 +240,8 @@ async def mcp_integration(
     async def _setup(entry: ConfigEntry) -> None:
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
+        if mcp_gate["ready"]:
+            assert entry.state is ConfigEntryState.LOADED
 
     with mock_config_flow(MCP_DOMAIN, _McpFlow):
         yield _setup
