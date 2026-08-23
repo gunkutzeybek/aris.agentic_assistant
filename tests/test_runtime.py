@@ -718,3 +718,41 @@ def test_prompts_point_at_the_laris_dashboard() -> None:
             assert "etkinleştirme kodu" not in lowered
     assert "abonel" in DORMANT_PROMPT["tr"].lower()  # "aboneliğinizi" (k→ğ mutation)
     assert "subscription" in DORMANT_PROMPT["en"].lower()
+
+
+async def test_existing_homapel_pipeline_adopted_by_engine(
+    hass: HomeAssistant, cloud: CloudMock, config_entry: MockConfigEntry
+) -> None:
+    """A pre-0.5 install has a hand-made pipeline under any name.
+
+    Reproduces a real 0.4.0 install: one preferred pipeline named "Homapel",
+    Homapel end-to-end, prefer_local_intents on. Upgrading must not create a
+    second pipeline or move the preferred flag.
+    """
+    assert await async_setup_component(hass, "assist_pipeline", {})
+    await _setup(hass, config_entry)
+    # Setup created "Laris"; simulate the older install by renaming it and
+    # clearing the flag, then reload.
+    store = hass.data[KEY_ASSIST_PIPELINE].pipeline_store
+    (laris,) = _laris_pipelines(hass)
+    updates = {k: v for k, v in laris.to_json().items() if k != "id"}
+    await store.async_update_item(
+        laris.id, {**updates, "name": "Homapel", "prefer_local_intents": True}
+    )
+    store.async_set_preferred_item(laris.id)
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={k: v for k, v in config_entry.data.items() if k != CONF_PIPELINE_CREATED},
+    )
+    before = {p.id for p in store.async_items()}
+
+    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert {p.id for p in store.async_items()} == before, "a duplicate pipeline was created"
+    assert _laris_pipelines(hass) == []
+    adopted = next(p for p in store.async_items() if p.id == laris.id)
+    assert adopted.name == "Homapel"
+    assert adopted.prefer_local_intents is True
+    assert store.async_get_preferred_item() == laris.id
+    assert config_entry.data[CONF_PIPELINE_CREATED] is True

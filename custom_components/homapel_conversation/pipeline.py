@@ -10,7 +10,9 @@ Rules:
   ``entry.data`` records it, so a deleted or edited pipeline is never
   recreated or touched again;
 * set as the preferred pipeline at creation time, nothing else;
-* an existing pipeline already named "Laris" is adopted as-is.
+* an existing pipeline that already uses our conversation/stt/tts entities (or
+  is already called "Laris") is adopted as-is — never duplicated, never edited,
+  and it keeps whatever preferred flag it has.
 """
 from __future__ import annotations
 
@@ -71,9 +73,26 @@ async def async_ensure_laris_pipeline(hass: HomeAssistant, entry: ConfigEntry) -
         return False
     store = pipeline_data.pipeline_store
 
-    existing = next((p for p in store.async_items() if p.name == PIPELINE_NAME), None)
+    # Adopt any pipeline that already routes through this integration — by
+    # engine, not by name. Installs that predate this feature have a working
+    # hand-made pipeline (often called "Homapel"); creating a second one and
+    # stealing "preferred" from it would be a regression, not an upgrade.
+    existing = next(
+        (
+            p
+            for p in store.async_items()
+            if p.conversation_engine == conversation_id
+            or p.name == PIPELINE_NAME
+            or (p.stt_engine == stt_id and p.tts_engine == tts_id)
+        ),
+        None,
+    )
     if existing is not None:
-        _LOGGER.info("Adopting the existing %r pipeline", PIPELINE_NAME)
+        _LOGGER.info(
+            "Adopting the existing %r pipeline; not creating %r",
+            existing.name,
+            PIPELINE_NAME,
+        )
         _mark_created(hass, entry)
         return False
 

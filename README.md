@@ -105,6 +105,8 @@ The config entry stores:
 
 The speech entities appear only when voice is enabled for the home server-side. Entity names are translated (English and Turkish).
 
+Entity ids are generated once, when each entity first appears, and Home Assistant never renames them afterwards. On installations from before 0.5.0 the speech entities may carry an area prefix (for example `stt.oturma_odasi_homapel_aris_homapel`) because they registered before the device had a name. That is cosmetic — the integration always resolves its own entities through the registry, never by id.
+
 ## Options
 
 **Settings → Devices & services → Homapel Conversation → Configure**
