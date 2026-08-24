@@ -21,6 +21,7 @@ from .api import (
     TtsCapability,
 )
 from .const import (
+    CONF_CONNECTOR_SOURCE,
     DASHBOARD_URL,
     DOMAIN,
     ISSUE_HOME_NOT_CONNECTED,
@@ -157,6 +158,35 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
 
     # --- Home connector -----------------------------------------------------
 
+    @property
+    def connector_is_ours(self) -> bool:
+        """Whether *this integration* registered the connector the cloud holds."""
+        entry = self.config_entry
+        return bool(entry and entry.data.get(CONF_CONNECTOR_SOURCE))
+
+    @property
+    def connector_reachable(self) -> bool | None:
+        """Tri-state reachability: True, False, or None when it isn't knowable.
+
+        The cloud reports ``reachable: false`` both for a probe that failed and
+        for a connector it has never probed — and a home migrated from the
+        installer era is exactly the latter: the migration back-fills
+        ``mcp_url`` but no ``connector_last_ok_at``, so it reads as
+        configured-but-unreachable forever while working perfectly.
+
+        Only a connector we registered ourselves has definitely been probed
+        (``PUT /v1/units/connector`` probes synchronously), so for anyone
+        else's connector a ``false`` means "unknown", never "broken".
+        """
+        data = self.data
+        if data is None or data.connector_configured is None:
+            return None
+        if not data.connector_configured:
+            return False
+        if data.connector_reachable:
+            return True
+        return False if self.connector_is_ours else None
+
     @callback
     def record_connector(self, *, configured: bool, reachable: bool) -> None:
         """Apply the result of a PUT /v1/units/connector we just made."""
@@ -195,9 +225,11 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
         else:
             ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOME_NOT_CONNECTED)
 
+        # ``connector_reachable`` is None for a connector we did not register,
+        # so a legacy home is never told its (working) connection is broken.
         unreachable = (
-            state.connector_configured is True
-            and state.connector_reachable is False
+            self.connector_reachable is False
+            and state.connector_configured is True
             and state.connector_unreachable_since is not None
             and dt_util.utcnow() - state.connector_unreachable_since >= UNREACHABLE_GRACE
         )

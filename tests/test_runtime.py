@@ -142,9 +142,18 @@ async def test_home_connected_on_when_cloud_reports_reachable(
 
 
 async def test_home_connected_off_when_configured_but_unreachable(
-    hass: HomeAssistant, cloud: CloudMock, config_entry: MockConfigEntry
+    hass: HomeAssistant, cloud: CloudMock, mcp_entry: MockConfigEntry
 ) -> None:
+    # "off" is only claimed for a connector we registered — see
+    # test_legacy_home_never_raises_unreachable for the other case.
     cloud.status = status_payload(connector={"configured": True, "reachable": False})
+    # Our connector re-probes on setup, so the PUT must agree with the poll.
+    cloud.connector_response = {
+        "reachable": False,
+        "checked_at": "2026-08-24T00:00:00Z",
+        "error": "timeout",
+    }
+    config_entry = _connected_entry(hass, mcp_entry)
     coordinator = await _setup(hass, config_entry)
 
     assert coordinator.data.connector_reachable is False
@@ -179,10 +188,10 @@ async def test_home_connected_attributes_follow_entry_connector(
 
 
 async def test_home_connected_follows_status_changes(
-    hass: HomeAssistant, cloud: CloudMock, config_entry: MockConfigEntry
+    hass: HomeAssistant, cloud: CloudMock, mcp_entry: MockConfigEntry
 ) -> None:
     cloud.status = status_payload(connector={"configured": True, "reachable": True})
-    coordinator = await _setup(hass, config_entry)
+    coordinator = await _setup(hass, _connected_entry(hass, mcp_entry))
     assert hass.states.get(HOME_CONNECTED).state == "on"
 
     cloud.status = status_payload(connector={"configured": True, "reachable": False})
@@ -261,11 +270,17 @@ async def test_not_connected_issue_cleared_on_configured_status(
 async def test_unreachable_issue_only_after_grace_period(
     hass: HomeAssistant,
     cloud: CloudMock,
-    config_entry: MockConfigEntry,
+    mcp_entry: MockConfigEntry,
     freezer: FrozenDateTimeFactory,
 ) -> None:
     cloud.status = status_payload(connector={"configured": True, "reachable": False})
-    coordinator = await _setup(hass, config_entry)
+    # Our connector re-probes on setup, so the PUT must agree with the poll.
+    cloud.connector_response = {
+        "reachable": False,
+        "checked_at": "2026-08-24T00:00:00Z",
+        "error": "timeout",
+    }
+    coordinator = await _setup(hass, _connected_entry(hass, mcp_entry))
     assert coordinator.data.connector_unreachable_since is not None
     since = coordinator.data.connector_unreachable_since
     assert _issue(hass, ISSUE_HOME_UNREACHABLE) is None
@@ -761,3 +776,72 @@ async def test_existing_homapel_pipeline_adopted_by_engine(
     assert adopted.prefer_local_intents is True
     assert store.async_get_preferred_item() == laris.id
     assert config_entry.data[CONF_PIPELINE_CREATED] is True
+
+
+# --- legacy homes: "never probed" must not read as "broken" -------------------
+
+
+def _legacy_status() -> dict:
+    """What the cloud reports for an installer-era home.
+
+    Migration 0012 back-fills `mcp_url` (so `configured` is true) but never
+    `connector_last_ok_at`, and `connector_summary()` derives `reachable` from
+    that timestamp — so a perfectly working legacy home reads as
+    configured-but-unreachable forever.
+    """
+    return status_payload(connector={"configured": True, "reachable": False})
+
+
+async def test_legacy_home_never_raises_unreachable(
+    hass: HomeAssistant,
+    cloud: CloudMock,
+    config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    cloud.status = _legacy_status()
+    await _setup(hass, config_entry)
+    assert CONF_CONNECTOR_SOURCE not in config_entry.data
+
+    # Well past the grace period the cloud still says the same thing.
+    for _ in range(6):
+        freezer.tick(POLL_INTERVAL)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+    assert _issue(hass, ISSUE_HOME_UNREACHABLE) is None
+    assert _issue(hass, ISSUE_HOME_NOT_CONNECTED) is None
+    # "we don't know", not "disconnected"
+    assert hass.states.get(HOME_CONNECTED).state == "unknown"
+    assert (
+        hass.states.get(HOME_CONNECTED).attributes["registered_by_integration"] is False
+    )
+
+
+async def test_our_connector_still_raises_unreachable(
+    hass: HomeAssistant,
+    cloud: CloudMock,
+    mcp_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The same cloud answer *is* actionable when we registered the connector."""
+    cloud.status = _legacy_status()
+    # Our connector re-probes on setup, so the PUT must agree with the poll.
+    cloud.connector_response = {
+        "reachable": False,
+        "checked_at": "2026-08-24T00:00:00Z",
+        "error": "timeout",
+    }
+    entry = _connected_entry(hass, mcp_entry)
+    await _setup(hass, entry)
+    assert entry.data[CONF_CONNECTOR_SOURCE]
+
+    assert _issue(hass, ISSUE_HOME_UNREACHABLE) is None  # inside the grace period
+    for _ in range(6):
+        freezer.tick(POLL_INTERVAL)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+    issue = _issue(hass, ISSUE_HOME_UNREACHABLE)
+    assert issue is not None
+    assert issue.severity is ir.IssueSeverity.ERROR
+    assert hass.states.get(HOME_CONNECTED).state == "off"

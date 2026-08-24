@@ -66,7 +66,7 @@ To build a pipeline by hand: **Settings → Voice assistants → Add assistant**
 - `binary_sensor.homapel_aris_home_connected` is `on` while the cloud reports it can reach your home. Its attributes show the source (`nabu_casa`, `external_url`, `tunnel`, `manual`) and the address used.
 - The connection is re-registered automatically after every Home Assistant start and whenever HA-MCP regenerates its webhook id.
 - **Reconfigure** (**Settings → Devices & services → Homapel Conversation → Reconfigure**) re-runs the connection steps — use it after changing your public address or HA-MCP settings, or to connect a home that was skipped during setup.
-- Repairs: **"Laris cannot control your home yet"** means the cloud reports no connection (skipped, or HA-MCP removed); **"Laris cannot reach your home"** means the registered connection has been unreachable for more than 15 minutes.
+- Repairs: **"Laris cannot control your home yet"** means the cloud reports no connection (skipped, or HA-MCP removed); **"Laris cannot reach your home"** means a connection *this integration registered* has been unreachable for more than 15 minutes. A connection set up some other way is reported as `unknown` rather than `off` — the cloud cannot tell "never checked" apart from "unreachable", so the integration does not guess.
 - Homes connected before 0.5.0 through a Homapel-provided tunnel keep working untouched after the upgrade — the integration leaves that connection alone. To move one onto the connector described above, install the HA-MCP Custom Component and run **Reconfigure**.
 
 ## Removing the integration
