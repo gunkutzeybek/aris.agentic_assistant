@@ -21,7 +21,6 @@ from .api import (
     TtsCapability,
 )
 from .const import (
-    CONF_CONNECTOR_SOURCE,
     DASHBOARD_URL,
     DOMAIN,
     ISSUE_HOME_NOT_CONNECTED,
@@ -178,10 +177,11 @@ class HomapelCoordinator(DataUpdateCoordinator[HomapelState]):
         if entry is None:
             return
 
-        not_connected = state.connector_configured is False or (
-            state.connector_configured is None
-            and not entry.data.get(CONF_CONNECTOR_SOURCE)
-        )
+        # Only the cloud can say a home has no connector. A missing block means
+        # an older cloud that does not report one — homes connected the legacy
+        # way (Homapel-run tunnel, no connector keys in entry.data) work fine,
+        # so staying quiet beats a repair issue telling them to reconfigure.
+        not_connected = state.connector_configured is False
         if not_connected:
             ir.async_create_issue(
                 self.hass,

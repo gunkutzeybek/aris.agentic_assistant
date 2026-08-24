@@ -214,13 +214,18 @@ async def test_not_connected_issue_when_cloud_reports_unconfigured(
     assert _issue(hass, ISSUE_HOME_NOT_CONNECTED) is None
 
 
-async def test_not_connected_issue_when_block_absent_and_entry_has_no_connector(
+async def test_no_issue_when_block_absent_on_an_older_cloud(
     hass: HomeAssistant, cloud: CloudMock, config_entry: MockConfigEntry
 ) -> None:
+    """A cloud that reports no connector block says nothing about the home.
+
+    Legacy installs (Homapel-run tunnel, no connector keys in entry.data) are
+    reachable and must not be told to reconfigure.
+    """
     cloud.status = status_payload()
     await _setup(hass, config_entry)
 
-    assert _issue(hass, ISSUE_HOME_NOT_CONNECTED) is not None
+    assert _issue(hass, ISSUE_HOME_NOT_CONNECTED) is None
     assert _issue(hass, ISSUE_HOME_UNREACHABLE) is None
 
 
