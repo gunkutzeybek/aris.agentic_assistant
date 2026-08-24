@@ -17,6 +17,10 @@ jobs:
         uses: hacs/action@22.5.0
         with:
           category: integration
+          # No brand assets yet and not listed in home-assistant/brands. Must be
+          # removed (and real assets added) before the HACS default-store
+          # submission - see CLAUDE.md section 2.
+          ignore: brands
 
   hassfest:
     name: Hassfest
@@ -25,7 +29,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Hassfest
-        uses: home-assistant/actions/hassfest@1.0.0
+        # @1.0.0 is broken ("No module named 'script'"); master is the ref
+        # Home Assistant documents for this action.
+        uses: home-assistant/actions/hassfest@master
 
   pytest:
     name: Lint and tests
