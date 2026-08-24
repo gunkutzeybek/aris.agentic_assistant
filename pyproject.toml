@@ -1,6 +1,6 @@
 [project]
 name = "homapel-conversation"
-version = "0.5.0"
+version = "0.5.1"
 description = "Home Assistant custom integration that makes a home a Laris home"
 requires-python = ">=3.14"
 license = { file = "LICENSE" }

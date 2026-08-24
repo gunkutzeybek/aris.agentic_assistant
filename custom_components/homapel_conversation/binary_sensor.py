@@ -78,10 +78,10 @@ class HomapelHomeConnectedBinarySensor(_HomapelBinarySensorBase):
 
     @property
     def is_on(self) -> bool | None:
-        data = self.coordinator.data
-        if data is None or data.connector_configured is None:
+        reachable = self.coordinator.connector_reachable
+        if reachable is None:
             return None
-        return bool(data.connector_configured and data.connector_reachable)
+        return reachable
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -91,6 +91,7 @@ class HomapelHomeConnectedBinarySensor(_HomapelBinarySensorBase):
         since = data.connector_unreachable_since
         return {
             "configured": data.connector_configured,
+            "registered_by_integration": self.coordinator.connector_is_ours,
             "source": self._entry.data.get(CONF_CONNECTOR_SOURCE),
             "base_url": self._entry.data.get(CONF_CONNECTOR_BASE_URL),
             "unreachable_since": since.isoformat() if since else None,
