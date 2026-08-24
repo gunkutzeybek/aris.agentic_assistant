@@ -20,13 +20,13 @@ from homeassistant.components.tts import TextToSpeechEntity, TtsAudioType, Voice
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import HomapelApiError, HomapelTurnNotFoundError, TtsStream
-from .const import CONF_UNIT_ID, DOMAIN, TTS_AUDIO_FORMAT
+from .const import DOMAIN, TTS_AUDIO_FORMAT
 from .coordinator import HomapelCoordinator
+from .entity import homapel_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,13 +55,13 @@ class HomapelTtsEntity(CoordinatorEntity[HomapelCoordinator], TextToSpeechEntity
     """Synthesizes speech through the Homapel voice gateway."""
 
     _attr_has_entity_name = True
-    _attr_name = "Homapel"
+    _attr_translation_key = "homapel"
 
     def __init__(self, coordinator: HomapelCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_tts"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.data[CONF_UNIT_ID])})
+        self._attr_device_info = homapel_device_info(entry)
 
     @property
     def _capability(self):
@@ -101,6 +101,8 @@ class HomapelTtsEntity(CoordinatorEntity[HomapelCoordinator], TextToSpeechEntity
             data = await stream.collect()
         except HomapelTurnNotFoundError:
             # Turn expired or already claimed — synthesize from scratch.
+            _LOGGER.debug("Attach rejected (410); falling back to standalone")
+            self.coordinator.record_tts(0, mode="standalone")
             stream = self._mode_a(message, language, options)
             data = await self._collect_or_raise(stream)
         except HomapelApiError as err:
@@ -134,7 +136,11 @@ class HomapelTtsEntity(CoordinatorEntity[HomapelCoordinator], TextToSpeechEntity
                 # Guaranteed to arrive before the first byte, but never replay
                 # a partially-played clip if that guarantee is ever broken.
                 if started:
-                    raise HomeAssistantError("Homapel text-to-speech stream truncated")
+                    raise HomeAssistantError(
+                        "Homapel text-to-speech stream truncated"
+                    ) from None
+                _LOGGER.debug("Attach rejected (410); falling back to standalone")
+                self.coordinator.record_tts(0, mode="standalone")
             except HomapelApiError as err:
                 raise HomeAssistantError(f"Homapel text-to-speech failed: {err}") from err
 
@@ -154,7 +160,12 @@ class HomapelTtsEntity(CoordinatorEntity[HomapelCoordinator], TextToSpeechEntity
         """Mode B when the conversation stage advertised a turn, else Mode A."""
         turn_id = self.coordinator.turns.take_speech(message)
         if turn_id is None:
+            _LOGGER.debug("TTS standalone (no live audio advertised for this reply)")
+            self.coordinator.record_tts(0, mode="standalone")
             return self._mode_a(message, language, options)
+
+        _LOGGER.debug("TTS attached to turn %s", turn_id)
+        self.coordinator.record_tts(0, mode="attached")
 
         # The feed synthesized with the language default, so name the voice
         # only when it differs — that makes the cloud re-synthesize correctly

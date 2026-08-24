@@ -10,8 +10,8 @@ prompt, and activate. `unit_not_active` never arrives on this path.
 """
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterable
+import logging
 
 from homeassistant.components.stt import (
     AudioBitRates,
@@ -27,18 +27,17 @@ from homeassistant.components.stt import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import HomapelApiError
 from .const import (
     CONF_UNIFIED_PIPELINE,
-    CONF_UNIT_ID,
     DEFAULT_UNIFIED_PIPELINE,
     DOMAIN,
 )
 from .coordinator import HomapelCoordinator
+from .entity import homapel_device_info
 from .satellite import async_active_satellite_device, async_area_id_for
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,13 +60,13 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
     """Proxies HA's audio stream to the Homapel voice gateway."""
 
     _attr_has_entity_name = True
-    _attr_name = "Homapel"
+    _attr_translation_key = "homapel"
 
     def __init__(self, coordinator: HomapelCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_stt"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.data[CONF_UNIT_ID])})
+        self._attr_device_info = homapel_device_info(entry)
 
     @property
     def supported_languages(self) -> list[str]:
@@ -106,6 +105,7 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
         # its speculative run every turn and the overlap is silently lost.
         # Unresolvable is fine — that just costs the speculation.
         device_id = async_active_satellite_device(self.hass)
+        eager = self._eager_enabled()
 
         try:
             result = await self.coordinator.client.transcribe(
@@ -117,13 +117,24 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
                 max_audio_seconds=capability.max_audio_seconds if capability else 0,
                 device_id=device_id,
                 area_id=async_area_id_for(self.hass, device_id),
-                eager=self._eager_enabled(),
+                eager=eager,
             )
         except HomapelApiError as err:
             _LOGGER.warning("Speech-to-text failed: %s", err)
             return SpeechResult(None, SpeechResultState.ERROR)
 
-        self.coordinator.record_stt(result.audio_seconds, result.provider_ms)
+        self.coordinator.record_stt(
+            result.audio_seconds, result.provider_ms, device_id=device_id, eager=eager
+        )
+        _LOGGER.debug(
+            "STT %.2fs in %sms (device=%s eager=%s turn=%s) -> %r",
+            result.audio_seconds,
+            result.provider_ms,
+            device_id or "unresolved",
+            eager,
+            result.turn_id,
+            result.text,
+        )
 
         # Handed to the conversation entity, which echoes it back to the cloud
         # so the turn's TTS feed can run. Skipped for silence — an empty
@@ -149,7 +160,7 @@ class HomapelSttEntity(CoordinatorEntity[HomapelCoordinator], SpeechToTextEntity
             from homeassistant.components import assist_pipeline
 
             pipelines = assist_pipeline.async_get_pipelines(self.hass)
-        except Exception:  # noqa: BLE001 - optional dependency, any failure is non-fatal
+        except Exception:
             # assist_pipeline unavailable means no pipeline is running this
             # entity at all, so the question is moot; default to the useful
             # behaviour rather than silently disabling the overlap.

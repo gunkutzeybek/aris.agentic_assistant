@@ -12,10 +12,11 @@ Responses:
 from __future__ import annotations
 
 import hmac
-import logging
 from http import HTTPStatus
+import logging
 
 from aiohttp.web import Request, Response
+
 from homeassistant.components import webhook
 from homeassistant.core import HomeAssistant, callback
 

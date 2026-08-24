@@ -1,15 +1,26 @@
 {
   "domain": "homapel_conversation",
   "name": "Homapel Conversation",
-  "version": "0.4.0",
-  "codeowners": ["@gunkutzeybek"],
+  "after_dependencies": [
+    "assist_pipeline",
+    "cloud",
+    "hassio"
+  ],
+  "codeowners": [
+    "@gunkutzeybek"
+  ],
   "config_flow": true,
-  "dependencies": ["conversation", "webhook", "stt", "tts"],
-  "after_dependencies": ["assist_pipeline"],
+  "dependencies": [
+    "conversation",
+    "webhook",
+    "stt",
+    "tts"
+  ],
   "documentation": "https://github.com/gunkutzeybek/aris.agentic_assistant",
-  "issue_tracker": "https://github.com/gunkutzeybek/aris.agentic_assistant/issues",
   "integration_type": "service",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/gunkutzeybek/aris.agentic_assistant/issues",
   "quality_scale": "silver",
-  "requirements": []
+  "requirements": [],
+  "version": "0.5.0"
 }

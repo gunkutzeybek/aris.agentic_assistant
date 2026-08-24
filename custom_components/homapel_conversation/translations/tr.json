@@ -2,24 +2,133 @@
   "config": {
     "step": {
       "user": {
-        "title": "Homapel Konuşma",
-        "description": "Bu Home Assistant örneğini Homapel buluta bağlamak için, Homapel kurulum aracının ürettiği üniteye özel API anahtarını girin. Genellikle kurulum aracı tarafından otomatik yazılır; bu formu yalnızca manuel kurulum için kullanın.",
+        "title": "Evinizi Laris'e bağlayın",
+        "description": "Laris panelinizdeki API anahtarını yapıştırın ({dashboard_url} → Evinizi bağlayın). Anahtar bu Home Assistant'ı Laris aboneliğinize bağlar; şimdi kurup aboneliği daha sonra başlatabilirsiniz.",
         "data": {
-          "api_key": "API anahtarı",
-          "api_base": "Bulut adresi",
-          "default_language": "Varsayılan dil (aktivasyon uyarısı için)"
+          "api_key": "API anahtarı"
+        },
+        "data_description": {
+          "api_key": "Laris panelinde Evinizi bağlayın bölümünde gösterilir. Parola gibi saklayın."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Gelişmiş",
+            "description": "Bunları yalnızca Laris destek ekibi istediyse değiştirin.",
+            "data": {
+              "api_base": "Bulut adresi",
+              "default_language": "Varsayılan dil"
+            },
+            "data_description": {
+              "api_base": "Bu evin bağlandığı Laris bulutu. Size bir test adresi verilmediyse varsayılanı bırakın.",
+              "default_language": "Ses hattı bir dil belirtmediğinde sesli abonelik uyarısı için kullanılır."
+            }
+          }
         }
+      },
+      "mcp_missing": {
+        "title": "HA-MCP Server bulunamadı",
+        "description": "Laris evinizi HA-MCP Custom Component üzerinden yönetir; bu bileşen henüz kurulu değil.\n\n1. HACS'ten **HA-MCP Custom Component** bileşenini kurun ({hacs_url}) ve Home Assistant'ı yeniden başlatın (Home Assistant {min_ha_version} veya üzeri gerekir).\n2. Ayarlar → Cihazlar ve hizmetler → Entegrasyon ekle → **HA-MCP** yolunu izleyip **HA-MCP Server** girdisini ekleyin.\n3. Buraya dönüp *Yeniden kontrol et* seçeneğini seçin.\n\nŞimdilik atlayabilirsiniz: Laris yanıt verir ama bu adımı *Yeniden yapılandır* üzerinden tamamlayana kadar evinizi kontrol edemez.",
+        "menu_options": {
+          "mcp_check": "Yeniden kontrol et",
+          "skip_connector": "Şimdilik atla"
+        }
+      },
+      "mcp_not_loaded": {
+        "title": "HA-MCP Server çalışmıyor",
+        "description": "HA-MCP Server girdisi var ama yüklenmemiş. Ayarlar → Cihazlar ve hizmetler → HA-MCP altında bir hata olup olmadığına bakın (ilk başlatmada sunucu indirilir ve birkaç dakika sürebilir), sonra *Yeniden kontrol et* seçeneğini seçin.",
+        "menu_options": {
+          "mcp_check": "Yeniden kontrol et",
+          "skip_connector": "Şimdilik atla"
+        }
+      },
+      "mcp_enable_auth": {
+        "title": "Laris'in HA-MCP'ye erişmesine izin verin",
+        "description": "Laris'in kendi hesabıyla oturum açabilmesi için HA-MCP Server'ın webhook'unda Home Assistant erişim belirteçlerini kabul etmesi gerekir. Gönderdiğinizde *Webhook kimlik doğrulaması* seçeneği **Home Assistant auth** olarak ayarlanır ve webhook etkinleştirilir; HA-MCP ardından kendini yeniden başlatır."
+      },
+      "mcp_wait": {
+        "title": "HA-MCP bekleniyor"
+      },
+      "tunnel_replace": {
+        "title": "Cloudflared zaten yapılandırılmış",
+        "description": "Bu sistemdeki Cloudflared eklentisinde zaten bir tünel belirteci var. Laris bunu yalnızca HA-MCP webhook'unu açan bir tünelle değiştirebilir; ya da bu Home Assistant için herkese açık bir https adresi girebilirsiniz.",
+        "menu_options": {
+          "tunnel_install": "Laris tüneliyle değiştir",
+          "manual_url": "Bunun yerine herkese açık adres gir",
+          "skip_connector": "Şimdilik atla"
+        }
+      },
+      "tunnel_install": {
+        "title": "Laris tüneli kuruluyor"
+      },
+      "tunnel_failed": {
+        "title": "Tünel kurulamadı",
+        "description": "Laris tüneli kurulamadı: {error}\n\nYeniden deneyebilir, bu Home Assistant için herkese açık bir https adresi girebilir ya da şimdilik atlayabilirsiniz.",
+        "menu_options": {
+          "tunnel_install": "Yeniden dene",
+          "manual_url": "Bunun yerine herkese açık adres gir",
+          "skip_connector": "Şimdilik atla"
+        }
+      },
+      "manual_url": {
+        "title": "Bu Home Assistant'ın herkese açık adresi",
+        "description": "Laris bu Home Assistant için herkese açık bir adres bulamadı (Home Assistant Cloud uzaktan erişimi yok, https dış adres yok). Bu Home Assistant'a internetten ulaşılan https adresini girin, örneğin {example_url}. {error}",
+        "data": {
+          "base_url": "Herkese açık https adresi"
+        },
+        "data_description": {
+          "base_url": "Yalnızca HA-MCP webhook yolu kullanılır; başka hiçbir şeyin dışarı açılması gerekmez."
+        }
+      },
+      "connector_register": {
+        "title": "Eviniz bağlanıyor"
+      },
+      "connector_unreachable": {
+        "title": "Laris evinize ulaşamadı",
+        "description": "Eviniz Laris'e {base_url} adresiyle kaydedildi ama bulut ona ulaşamadı: {error}\n\nHA-MCP hâlâ başlıyorsa bir dakika bekleyip yeniden deneyin. Adresi değiştirebilir ya da şimdi bitirebilirsiniz — Laris denemeye devam eder ve ev ulaşılabilir olana kadar bir onarım uyarısı gösterilir.",
+        "menu_options": {
+          "connector_register": "Yeniden dene",
+          "manual_url": "Adresi değiştir",
+          "finish_anyway": "Yine de bitir"
+        }
+      },
+      "connector_error": {
+        "title": "Laris'e kaydedilemedi",
+        "description": "Eviniz Laris bulutuna kaydedilemedi: {error}",
+        "menu_options": {
+          "connector_register": "Yeniden dene",
+          "skip_connector": "Şimdilik atla"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Yeni Laris API anahtarı",
+        "description": "Laris API anahtarınız reddedildi — büyük olasılıkla panelden yenilendi ({dashboard_url} → Evinizi bağlayın). Yeni anahtarı yapıştırın.",
+        "data": {
+          "api_key": "API anahtarı"
+        }
+      },
+      "reconfigure": {
+        "title": "Ev bağlantısını yeniden denetle",
+        "description": "Laris, HA-MCP Server'ı yeniden arayacak, bu Home Assistant'ın herkese açık adresini bulacak (bugün: {base_url}) ve bulutla kaydedecek. Bağlantı kurulumunu yeniden çalıştırmak için devam edin."
       }
     },
+    "progress": {
+      "mcp_wait": "HA-MCP Server'ın başlaması bekleniyor. İlk başlatmada sunucu indirilir ve birkaç dakika sürebilir.",
+      "tunnel_install": "Cloudflared eklentisi, Laris'in verdiği tünelle kuruluyor ve başlatılıyor.",
+      "connector_register": "Bu ev Laris'e kaydediliyor ve bulutun ona ulaşabildiği kontrol ediliyor."
+    },
     "error": {
-      "invalid_auth": "API anahtarı Homapel bulut tarafından reddedildi.",
-      "forbidden": "Bu ünite bağlanmaya yetkili değil (askıda veya yanlış kiracı).",
-      "timeout": "Homapel buluta ulaşılamadı (zaman aşımı).",
-      "cannot_connect": "Homapel buluta bağlanılamadı.",
-      "unknown": "Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin."
+      "invalid_auth": "API anahtarı Laris bulutu tarafından reddedildi. Panelden yeniden kopyalayın.",
+      "forbidden": "Bu evin bağlanmasına izin verilmiyor (askıya alınmış). Laris desteğiyle iletişime geçin.",
+      "timeout": "Laris bulutuna ulaşılamadı (zaman aşımı).",
+      "cannot_connect": "Laris bulutuna bağlanılamadı. İnternet bağlantısını kontrol edin.",
+      "unknown": "Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.",
+      "invalid_url": "Tam bir https adresi girin, örneğin {example_url}."
     },
     "abort": {
-      "already_configured": "Bu ünite zaten yapılandırılmış."
+      "already_configured": "Bu ev zaten yapılandırılmış.",
+      "reauth_successful": "Yeni API anahtarı kaydedildi.",
+      "reconfigure_successful": "Ev bağlantısı güncellendi.",
+      "unit_mismatch": "Bu anahtar burada yapılandırılandan farklı bir eve ait."
     }
   },
   "options": {
@@ -38,23 +147,55 @@
       }
     }
   },
+  "issues": {
+    "home_not_connected": {
+      "title": "Laris evinizi henüz kontrol edemiyor",
+      "description": "Laris aboneliğiniz bağlı ama bulutun bu Home Assistant'a ulaşacak bir yolu yok; bu yüzden sesli komutlar hiçbir şeyi kontrol edemez. HACS'ten HA-MCP Custom Component bileşenini kurun, HA-MCP Server girdisini ekleyin, sonra Ayarlar → Cihazlar ve hizmetler → Homapel Konuşma → Yeniden yapılandır yolundan evinizi bağlayın."
+    },
+    "home_unreachable": {
+      "title": "Laris evinize ulaşamıyor",
+      "description": "Laris bulutu 15 dakikadan uzun süredir bu Home Assistant'a ulaşamıyor. HA-MCP Server'ın çalıştığını ve uzaktan erişimin (Home Assistant Cloud, dış adresiniz ya da Cloudflared eklentisi) ayakta olduğunu kontrol edin; sonra Ayarlar → Cihazlar ve hizmetler → Homapel Konuşma → Yeniden yapılandır yolundan bağlantıyı yeniden denetleyin. Durum: {dashboard_url}."
+    }
+  },
   "entity": {
     "binary_sensor": {
-      "active": { "name": "Aktif" }
+      "active": {
+        "name": "Aktif"
+      },
+      "home_connected": {
+        "name": "Ev bağlı"
+      }
     },
     "sensor": {
-      "tier": { "name": "Abonelik seviyesi" },
-      "latency": { "name": "Son bulut gecikmesi" },
-      "stt_latency": { "name": "Son konuşma tanıma gecikmesi" }
+      "tier": {
+        "name": "Abonelik seviyesi",
+        "state": {
+          "dormant": "Pasif",
+          "basic": "Temel",
+          "pro": "Pro"
+        }
+      },
+      "latency": {
+        "name": "Son bulut gecikmesi"
+      },
+      "stt_latency": {
+        "name": "Son konuşma tanıma gecikmesi"
+      }
     },
     "conversation": {
-      "homapel": { "name": "Homapel" }
+      "homapel": {
+        "name": "Homapel"
+      }
     },
     "stt": {
-      "homapel": { "name": "Homapel" }
+      "homapel": {
+        "name": "Homapel"
+      }
     },
     "tts": {
-      "homapel": { "name": "Homapel" }
+      "homapel": {
+        "name": "Homapel"
+      }
     }
   }
 }

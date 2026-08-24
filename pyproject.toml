@@ -1,0 +1,78 @@
+[project]
+name = "homapel-conversation"
+version = "0.5.0"
+description = "Home Assistant custom integration that makes a home a Laris home"
+requires-python = ">=3.14"
+license = { file = "LICENSE" }
+
+[project.optional-dependencies]
+# pytest-homeassistant-custom-component pins the Home Assistant version (0.13.357
+# → HA 2026.8.3, Python 3.14). The rest are the requirements of the HA components
+# the tests load (conversation, stt, tts, assist_pipeline, cloud, hassio) — HA's
+# pip package does not pull them in.
+test = [
+  "pytest-homeassistant-custom-component==0.13.357",
+  "ruff>=0.8",
+  "hassil==3.11.0",
+  "home-assistant-intents==2026.7.30",
+  "mutagen==1.48.1",
+  "hass-nabucasa==2.2.0",
+  "pymicro-vad==1.0.1",
+  "pyspeex-noise==1.0.2",
+  "ha-ffmpeg==3.2.2",
+  "ifaddr==0.2.0",
+  "home-assistant-frontend==20260729.7",
+]
+
+# Nothing is built: the integration ships as custom_components/ via HACS. The
+# build-system block exists only so `pip install -e ".[test]"` can install the
+# test extras.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-p no:cacheprovider --strict-markers"
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["custom_components", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "W",    # pycodestyle warnings
+  "I",    # isort
+  "UP",   # pyupgrade
+  "B",    # bugbear
+  "ASYNC",
+  "RUF",
+]
+ignore = [
+  "E501",   # line length handled by formatter
+  "RUF001", "RUF002", "RUF003",  # Turkish / typographic characters in strings and docs
+  "RUF012",
+  "ASYNC109",  # aiohttp-style explicit timeout parameters
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components", "tests"]
+force-sort-within-sections = true
+combine-as-imports = true
+section-order = ["future", "standard-library", "third-party", "homeassistant", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+"homeassistant" = ["homeassistant"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ASYNC"]
