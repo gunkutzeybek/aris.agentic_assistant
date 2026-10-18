@@ -4,7 +4,8 @@
   "after_dependencies": [
     "assist_pipeline",
     "cloud",
-    "hassio"
+    "hassio",
+    "network"
   ],
   "codeowners": [
     "@gunkutzeybek"
@@ -22,5 +23,5 @@
   "issue_tracker": "https://github.com/gunkutzeybek/aris.agentic_assistant/issues",
   "quality_scale": "silver",
   "requirements": [],
-  "version": "0.5.1"
+  "version": "0.5.2"
 }
