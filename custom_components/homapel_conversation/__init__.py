@@ -3,7 +3,8 @@
 Setup order: cloud client → coordinator (first status poll; a 401 starts the
 reauth flow) → inbound status webhook → entity platforms → connector manager
 (re-registers the ha-mcp endpoint with the cloud after HA start) → the
-"Laris" Assist pipeline, created once.
+"Laris" Assist pipeline, created once. A once-a-minute watch keeps HA's
+automatic local URL on the host's current IP (see `local_ip.py`).
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import HomapelCoordinator
+from .local_ip import async_track_local_ip
 from .pipeline import async_ensure_laris_pipeline
 from .webhook import async_register_webhook, async_unregister_webhook
 
@@ -63,6 +65,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     manager.async_setup()
     coordinator.connector_manager = manager
     entry.async_on_unload(manager.async_unload)
+
+    # Satellites fetch TTS audio from HA's local URL; keep it on the current IP.
+    entry.async_on_unload(async_track_local_ip(hass))
 
     # The voice pipeline needs the stt/tts entities, which exist only when the
     # cloud advertises voice; the helper is a no-op until they do.

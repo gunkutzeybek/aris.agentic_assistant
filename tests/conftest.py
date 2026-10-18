@@ -1,8 +1,9 @@
 """Shared fixtures: a mocked Laris cloud and a stand-in ha_mcp_tools server entry."""
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
+from unittest.mock import patch
 
 from aiohttp.web import Request, Response
 import pytest
@@ -55,6 +56,17 @@ def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
 async def core_components(hass: HomeAssistant) -> None:
     """``conversation`` needs the ``homeassistant`` component's exposed-entity store."""
     assert await async_setup_component(hass, "homeassistant", {})
+
+
+@pytest.fixture(autouse=True)
+def no_host_network_probe() -> Iterator[None]:
+    """The local-IP watch reads interfaces and probes routing; the harness blocks sockets."""
+    module = "custom_components.homapel_conversation.local_ip"
+    with (
+        patch(f"{module}.async_load_adapters", return_value=[]),
+        patch(f"{module}.async_get_source_ip", return_value=None),
+    ):
+        yield
 
 
 def status_payload(
